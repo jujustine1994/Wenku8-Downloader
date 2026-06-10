@@ -16,7 +16,7 @@ def _get_session() -> cf_requests.Session:
 
 def download_volume(aid: str, vid: int, filepath: str,
                     retry_count: int = RETRY_COUNT,
-                    retry_delay: int = RETRY_DELAY) -> bool:
+                    retry_delay: float = RETRY_DELAY) -> bool:
     url = f"{DOWNLOAD_BASE_URL}?aid={aid}&vid={vid}&charset=utf-8"
     for attempt in range(1, retry_count + 1):
         try:
@@ -47,7 +47,7 @@ def build_filepath(output_dir: str, book_name: str, volume_index: int,
 def run_download_all(aid: str, book_name: str, volumes: list[dict],
                      output_dir: str, msg_queue: queue.Queue,
                      retry_count: int = RETRY_COUNT,
-                     retry_delay: int = RETRY_DELAY) -> None:
+                     retry_delay: float = RETRY_DELAY) -> None:
     total = len(volumes)
     success = 0
     fail_volumes: list[dict] = []

@@ -124,3 +124,4 @@ def test_run_download_all_passes_retry_to_volume(tmp_path):
         msgs.append(q.get())
     log_msg = next(m for m in msgs if m[0] == "log")
     assert "2x" in log_msg[4]
+    assert session.get.call_count == 2  # retry_count=2 → called twice
