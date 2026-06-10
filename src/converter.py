@@ -17,7 +17,8 @@ def run_convert_all(
     fail = 0
     for filepath in files:
         try:
-            text = open(filepath, encoding="utf-8", errors="replace").read()
+            with open(filepath, encoding="utf-8", errors="replace") as f:
+                text = f.read()
             converted = convert_to_traditional(text)
             if output_mode == "overwrite":
                 out_path = filepath
