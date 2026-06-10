@@ -82,7 +82,7 @@ class App:
         self.root = root
         self.root.title("Wenku8 Downloader")
         self.root.resizable(True, True)
-        self.root.minsize(600, 620)
+        self.root.minsize(800, 640)
 
         self.msg_queue: queue.Queue = queue.Queue()
         self._volumes = []

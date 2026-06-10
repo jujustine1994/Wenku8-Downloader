@@ -1,35 +1,51 @@
 import os
 import queue
-from unittest.mock import patch
+from unittest.mock import patch, MagicMock
 import pytest
 from src.downloader import download_volume, build_filepath, run_download_all
 
-DOWNLOAD_URL = "http://dl.wenku8.com/packtxt.php?aid=1861&vid=65280&charset=utf-8"
-CONTENT = "A" * 500
+CONTENT = b"A" * 500
 
 
-def test_download_success(tmp_path, requests_mock):
-    requests_mock.get(DOWNLOAD_URL, text=CONTENT)
+def _ok_resp(content=CONTENT):
+    resp = MagicMock()
+    resp.content = content
+    resp.raise_for_status = MagicMock()
+    return resp
+
+
+def _mock_session(side_effect):
+    session = MagicMock()
+    session.get.side_effect = side_effect
+    return session
+
+
+def test_download_success(tmp_path):
+    session = _mock_session([_ok_resp()])
     fp = str(tmp_path / "vol.txt")
-    assert download_volume("1861", 65280, fp) is True
-    assert open(fp, encoding="utf-8").read() == CONTENT
+    with patch("src.downloader._get_session", return_value=session):
+        assert download_volume("1861", 65280, fp) is True
+    assert open(fp, "rb").read() == CONTENT
 
 
-def test_download_retry_then_success(tmp_path, requests_mock):
-    requests_mock.get(DOWNLOAD_URL, [
-        {"exc": Exception("timeout")},
-        {"exc": Exception("timeout")},
-        {"text": CONTENT},
+def test_download_retry_then_success(tmp_path):
+    session = _mock_session([
+        Exception("timeout"),
+        Exception("timeout"),
+        _ok_resp(),
     ])
     fp = str(tmp_path / "retry.txt")
-    with patch("src.downloader.time.sleep"):
+    with patch("src.downloader._get_session", return_value=session), \
+         patch("src.downloader.time.sleep"):
         assert download_volume("1861", 65280, fp) is True
 
 
-def test_download_all_fail(tmp_path, requests_mock):
-    requests_mock.get(DOWNLOAD_URL, exc=Exception("unreachable"))
+def test_download_all_fail(tmp_path):
+    session = MagicMock()
+    session.get.side_effect = Exception("unreachable")
     fp = str(tmp_path / "fail.txt")
-    with patch("src.downloader.time.sleep"):
+    with patch("src.downloader._get_session", return_value=session), \
+         patch("src.downloader.time.sleep"):
         assert download_volume("1861", 65280, fp) is False
 
 
@@ -44,18 +60,17 @@ def test_build_filepath_triple_digit():
     assert "001 某書 第一卷.txt" in path
 
 
-def test_run_download_all_messages(tmp_path, requests_mock):
-    url1 = "http://dl.wenku8.com/packtxt.php?aid=1&vid=99&charset=utf-8"
-    url2 = "http://dl.wenku8.com/packtxt.php?aid=1&vid=199&charset=utf-8"
-    requests_mock.get(url1, text="X" * 500)
-    requests_mock.get(url2, text="Y" * 500)
+def test_run_download_all_messages(tmp_path):
+    session = MagicMock()
+    session.get.return_value = _ok_resp()
 
     volumes = [
         {"index": 1, "name": "第一卷", "first_cid": 100, "vid": 99},
         {"index": 2, "name": "第二卷", "first_cid": 200, "vid": 199},
     ]
     q = queue.Queue()
-    run_download_all("1", "TestBook", volumes, str(tmp_path), q)
+    with patch("src.downloader._get_session", return_value=session):
+        run_download_all("1", "TestBook", volumes, str(tmp_path), q)
 
     messages = []
     while not q.empty():
