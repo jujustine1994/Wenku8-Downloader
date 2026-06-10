@@ -6,7 +6,7 @@ import threading
 import tkinter as tk
 from tkinter import ttk, scrolledtext
 
-from src.config import OUTPUT_DIR
+from src.config import OUTPUT_DIR, RETRY_COUNT, RETRY_DELAY
 from src.scraper import parse_aid_from_url, fetch_catalog, parse_book_title, parse_volumes
 from src.downloader import run_download_all
 
@@ -97,9 +97,14 @@ class App:
         self._fail_volumes: list = []
         self._aid = None
         self._book_name = None
-        self._current_theme = self._load_config().get("theme", "light")
+        _cfg = self._load_config()
+        self._current_theme = _cfg.get("theme", "light")
+        self._path_var = tk.StringVar()
+        self._retry_count = int(_cfg.get("retry_count", RETRY_COUNT))
+        self._retry_delay = int(_cfg.get("retry_delay", RETRY_DELAY))
 
         self._build_ui()
+        self._path_var.set(resolve_output_dir(_cfg, PROJECT_ROOT))
         self._apply_theme(self._current_theme)
         self._poll_queue()
 
@@ -125,6 +130,19 @@ class App:
         ttk.Button(url_row, text="⚙", command=self._open_settings, width=4).grid(
             row=0, column=2, padx=(4, 0)
         )
+
+        folder_row = ttk.Frame(frame_url)
+        folder_row.pack(fill="x", pady=(6, 0))
+        folder_row.columnconfigure(1, weight=1)
+
+        ttk.Label(folder_row, text="下載至：", font=FS).grid(row=0, column=0, sticky="w")
+        path_entry = ttk.Entry(folder_row, textvariable=self._path_var, font=FS)
+        path_entry.grid(row=0, column=1, sticky="ew", padx=(4, 8))
+        path_entry.bind("<Return>", self._on_path_confirm)
+        path_entry.bind("<FocusOut>", self._on_path_confirm)
+        ttk.Button(
+            folder_row, text="瀏覽", command=self._on_browse_folder, width=6
+        ).grid(row=0, column=2)
 
         # === 卷列表（勾選清單）===
         frame_volumes = ttk.LabelFrame(self.root, text=" 卷列表 ", padding=8)
@@ -232,6 +250,24 @@ class App:
 
     def _set_status(self, msg: str, level: str = "info"):
         self.msg_queue.put(("status", (msg, level)))
+
+    def _on_browse_folder(self):
+        from tkinter import filedialog
+        current = self._path_var.get()
+        initial = current if os.path.isdir(current) else PROJECT_ROOT
+        chosen = filedialog.askdirectory(initialdir=initial, title="選擇下載資料夾")
+        if chosen:
+            self._path_var.set(chosen)
+            self._save_config({"output_dir": chosen})
+            self._set_status(f"下載位置：{chosen}", "success")
+
+    def _on_path_confirm(self, event=None):
+        path = self._path_var.get().strip()
+        if os.path.isdir(path):
+            self._save_config({"output_dir": path})
+            self._set_status(f"下載位置：{path}", "info")
+        else:
+            self._set_status(f"路徑不存在：{path}（下載時會自動建立）", "error")
 
     # ---- 主題 ----
 
@@ -435,13 +471,11 @@ class App:
         self.progress_bar["maximum"] = len(selected)
         self._set_status(f"下載中... 共 {len(selected)} 卷", "info")
 
-        output_dir = os.path.join(
-            os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-            OUTPUT_DIR,
-        )
+        output_dir = self._path_var.get()
         threading.Thread(
             target=run_download_all,
-            args=(self._aid, self._book_name, selected, output_dir, self.msg_queue),
+            args=(self._aid, self._book_name, selected, output_dir, self.msg_queue,
+                  self._retry_count, self._retry_delay),
             daemon=True,
         ).start()
 
@@ -462,13 +496,11 @@ class App:
         self.progress_bar["value"] = 0
         self.progress_bar["maximum"] = len(vols)
         self._set_status(f"重試中... 共 {len(vols)} 卷", "info")
-        output_dir = os.path.join(
-            os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-            OUTPUT_DIR,
-        )
+        output_dir = self._path_var.get()
         threading.Thread(
             target=run_download_all,
-            args=(self._aid, self._book_name, vols, output_dir, self.msg_queue),
+            args=(self._aid, self._book_name, vols, output_dir, self.msg_queue,
+                  self._retry_count, self._retry_delay),
             daemon=True,
         ).start()
 
