@@ -102,6 +102,7 @@ class App:
         self._path_var = tk.StringVar()
         self._retry_count = int(_cfg.get("retry_count", RETRY_COUNT))
         self._retry_delay = int(_cfg.get("retry_delay", RETRY_DELAY))
+        self._browsing = False
 
         self._build_ui()
         self._path_var.set(resolve_output_dir(_cfg, PROJECT_ROOT))
@@ -253,21 +254,28 @@ class App:
 
     def _on_browse_folder(self):
         from tkinter import filedialog
-        current = self._path_var.get()
-        initial = current if os.path.isdir(current) else PROJECT_ROOT
-        chosen = filedialog.askdirectory(initialdir=initial, title="選擇下載資料夾")
-        if chosen:
-            self._path_var.set(chosen)
-            self._save_config({"output_dir": chosen})
-            self._set_status(f"下載位置：{chosen}", "success")
+        self._browsing = True
+        try:
+            current = self._path_var.get()
+            initial = current if os.path.isdir(current) else PROJECT_ROOT
+            chosen = filedialog.askdirectory(initialdir=initial, title="選擇下載資料夾")
+            if chosen:
+                self._path_var.set(chosen)
+                self._save_config({"output_dir": chosen})
+                self._set_status(f"下載位置：{chosen}", "success")
+        finally:
+            self._browsing = False
 
     def _on_path_confirm(self, event=None):
+        if self._browsing:
+            return
         path = self._path_var.get().strip()
+        self._path_var.set(path)
         if os.path.isdir(path):
             self._save_config({"output_dir": path})
             self._set_status(f"下載位置：{path}", "info")
         else:
-            self._set_status(f"路徑不存在：{path}（下載時會自動建立）", "error")
+            self._set_status(f"路徑不存在：{path}（下載時會自動建立）", "info")
 
     # ---- 主題 ----
 
