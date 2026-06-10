@@ -209,11 +209,13 @@ class App:
         )
         self._status_bar.grid(row=99, column=0, sticky="ew")
         # 防止長錯誤訊息撐寬視窗：讓 label 跟著視窗寬度折行而非撐大視窗
-        self.root.bind(
-            "<Configure>",
-            lambda e: self._status_bar.config(wraplength=self.root.winfo_width() - 20)
-            if e.widget is self.root else None,
-        )
+        def _on_root_resize(e):
+            if e.widget is not self.root:
+                return
+            w = self.root.winfo_width()
+            self._status_bar.config(wraplength=w - 20)
+            self.title_label.config(wraplength=w - 40)
+        self.root.bind("<Configure>", _on_root_resize)
 
     def _set_status(self, msg: str, level: str = "info"):
         self.msg_queue.put(("status", (msg, level)))

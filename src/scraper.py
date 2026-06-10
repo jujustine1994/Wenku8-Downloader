@@ -4,6 +4,16 @@ from bs4 import BeautifulSoup
 from curl_cffi import requests as cf_requests
 from src.config import CATALOG_BASE_URL
 
+# Module-level session：重用 TLS 連線，避免每次重建握手
+_session: cf_requests.Session | None = None
+
+
+def _get_session() -> cf_requests.Session:
+    global _session
+    if _session is None:
+        _session = cf_requests.Session()
+    return _session
+
 
 def parse_aid_from_url(url: str) -> str:
     url = url.strip()
@@ -29,10 +39,10 @@ def parse_aid_from_url(url: str) -> str:
 def fetch_catalog(aid: str) -> BeautifulSoup:
     url = f"{CATALOG_BASE_URL}?aid={aid}"
     # impersonate="chrome120" 模擬 Chrome TLS 指紋，繞過 Cloudflare Bot Management
-    resp = cf_requests.get(url, impersonate="chrome120", timeout=30)
+    # 傳 resp.content（bytes）給 BeautifulSoup，讓 lxml 從 meta charset 自動偵測 GBK/UTF-8
+    resp = _get_session().get(url, impersonate="chrome120", timeout=30)
     resp.raise_for_status()
-    resp.encoding = "utf-8"
-    return BeautifulSoup(resp.text, "lxml")
+    return BeautifulSoup(resp.content, "lxml")
 
 
 def parse_book_title(soup: BeautifulSoup) -> str:
@@ -41,7 +51,13 @@ def parse_book_title(soup: BeautifulSoup) -> str:
         return h2.get_text(strip=True)
     title_tag = soup.find("title")
     if title_tag:
-        return title_tag.get_text(strip=True).split(" - ")[0].strip()
+        raw = title_tag.get_text(strip=True)
+        # wenku8 格式："書名小說在線閱讀與TXT電子書下載-作者-出版社-網站名"
+        # 取書名關鍵字前的部分
+        m = re.match(r"^(.+?)(?:小说|TXT|全文|在线|电子书)", raw, re.IGNORECASE)
+        if m:
+            return m.group(1).strip()
+        return raw.split(" - ")[0].strip()
     return "未知書名"
 
 
