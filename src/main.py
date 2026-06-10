@@ -356,7 +356,6 @@ class App:
                 self._cb_frame,
                 text=f"  {str(v['index']).zfill(pad)}  {v['name']}",
                 variable=var,
-                font=FM,
             )
             cb.pack(anchor="w", fill="x", padx=4, pady=1)
             cb.bind("<MouseWheel>", self._on_canvas_scroll)
