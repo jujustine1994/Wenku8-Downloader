@@ -367,9 +367,38 @@ class App:
         theme_var.trace_add("write", lambda *_: draw_preview(theme_var.get()))
         draw_preview(self._current_theme)
 
+        tab_download = ttk.Frame(notebook, padding=12)
+        notebook.add(tab_download, text="  下載  ")
+
+        row1 = ttk.Frame(tab_download)
+        row1.pack(fill="x", pady=(0, 12))
+        ttk.Label(row1, text="重試次數：", font=F).pack(side="left")
+        retry_count_var = tk.IntVar(value=self._retry_count)
+        ttk.Spinbox(
+            row1, from_=1, to=10, textvariable=retry_count_var,
+            width=5, font=F
+        ).pack(side="left", padx=(8, 4))
+        ttk.Label(row1, text="次", font=F).pack(side="left")
+
+        row2 = ttk.Frame(tab_download)
+        row2.pack(fill="x")
+        ttk.Label(row2, text="重試間隔：", font=F).pack(side="left")
+        retry_delay_var = tk.IntVar(value=self._retry_delay)
+        ttk.Spinbox(
+            row2, from_=1, to=30, textvariable=retry_delay_var,
+            width=5, font=F
+        ).pack(side="left", padx=(8, 4))
+        ttk.Label(row2, text="秒", font=F).pack(side="left")
+
         def _apply():
             self._apply_theme(theme_var.get())
-            self._save_config({"theme": theme_var.get()})
+            self._retry_count = retry_count_var.get()
+            self._retry_delay = retry_delay_var.get()
+            self._save_config({
+                "theme": theme_var.get(),
+                "retry_count": self._retry_count,
+                "retry_delay": self._retry_delay,
+            })
             win.destroy()
 
         btn_row = ttk.Frame(win)
