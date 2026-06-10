@@ -85,6 +85,13 @@ def show_cth_banner():
     print()
 
 
+def _conv_worker(
+    files: list[str], output_mode: str, msg_queue: queue.Queue
+) -> None:
+    from src.converter import run_convert_all
+    run_convert_all(files, output_mode, msg_queue)
+
+
 class App:
     def __init__(self, root: tk.Tk):
         self.root = root
@@ -263,7 +270,139 @@ class App:
         self.root.bind("<Configure>", _on_root_resize)
 
     def _build_convert_tab(self, tab: ttk.Frame):
-        pass
+        pad = {"padx": 14, "pady": 6}
+        tab.columnconfigure(0, weight=1)
+        tab.rowconfigure(1, weight=1)
+        tab.rowconfigure(3, weight=1)
+
+        # Header：計數 + 選擇檔案按鈕
+        frame_header = ttk.Frame(tab)
+        frame_header.grid(row=0, column=0, sticky="ew", **pad)
+        frame_header.columnconfigure(0, weight=1)
+
+        self._conv_count_label = ttk.Label(
+            frame_header, text="未選擇任何檔案", font=FS
+        )
+        self._conv_count_label.grid(row=0, column=0, sticky="w")
+        ttk.Button(
+            frame_header, text="選擇檔案", command=self._on_conv_select, width=10
+        ).grid(row=0, column=1)
+
+        # 檔案列表（可捲動）
+        frame_files = ttk.LabelFrame(tab, text=" 檔案列表 ", padding=8)
+        frame_files.grid(row=1, column=0, sticky="nsew", padx=14, pady=(0, 6))
+        frame_files.columnconfigure(0, weight=1)
+        frame_files.rowconfigure(0, weight=1)
+
+        self._conv_canvas = tk.Canvas(frame_files, highlightthickness=0, height=120)
+        conv_sb = ttk.Scrollbar(
+            frame_files, orient="vertical", command=self._conv_canvas.yview
+        )
+        self._conv_canvas.configure(yscrollcommand=conv_sb.set)
+        self._conv_canvas.grid(row=0, column=0, sticky="nsew")
+        conv_sb.grid(row=0, column=1, sticky="ns")
+
+        self._conv_file_frame = ttk.Frame(self._conv_canvas)
+        self._conv_file_window = self._conv_canvas.create_window(
+            (0, 0), window=self._conv_file_frame, anchor="nw"
+        )
+        self._conv_file_frame.bind(
+            "<Configure>",
+            lambda e: self._conv_canvas.configure(
+                scrollregion=self._conv_canvas.bbox("all")
+            ),
+        )
+        self._conv_canvas.bind(
+            "<Configure>",
+            lambda e: self._conv_canvas.itemconfig(
+                self._conv_file_window, width=e.width
+            ),
+        )
+
+        # 輸出模式 + 開始按鈕
+        frame_output = ttk.Frame(tab)
+        frame_output.grid(row=2, column=0, sticky="ew", padx=14, pady=(0, 6))
+
+        ttk.Label(frame_output, text="輸出：", font=FS).pack(side="left")
+        self._conv_output_var = tk.StringVar(value="overwrite")
+        ttk.Radiobutton(
+            frame_output, text="覆蓋原檔",
+            variable=self._conv_output_var, value="overwrite"
+        ).pack(side="left", padx=(0, 16))
+        ttk.Radiobutton(
+            frame_output, text="另存新檔（加 _TC 後綴）",
+            variable=self._conv_output_var, value="new_file"
+        ).pack(side="left")
+
+        self._conv_btn = ttk.Button(
+            frame_output, text="開始轉換",
+            command=self._on_conv_start, width=10, state="disabled"
+        )
+        self._conv_btn.pack(side="right")
+
+        # 記錄區
+        frame_conv_log = ttk.LabelFrame(tab, text=" 記錄 ", padding=8)
+        frame_conv_log.grid(row=3, column=0, sticky="nsew", padx=14, pady=(0, 6))
+        frame_conv_log.columnconfigure(0, weight=1)
+        frame_conv_log.rowconfigure(0, weight=1)
+
+        self._conv_log = scrolledtext.ScrolledText(
+            frame_conv_log, width=60, height=6,
+            state="disabled", font=FM
+        )
+        self._conv_log.pack(fill="both", expand=True)
+
+    def _on_conv_select(self):
+        from tkinter import filedialog
+        chosen = filedialog.askopenfilenames(
+            title="選擇 TXT 檔案",
+            filetypes=[("文字檔案", "*.txt"), ("所有檔案", "*.*")],
+        )
+        for path in chosen:
+            if path not in self._conv_files:
+                self._conv_files.append(path)
+        self._refresh_conv_file_list()
+
+    def _conv_remove_file(self, path: str):
+        self._conv_files.remove(path)
+        self._refresh_conv_file_list()
+
+    def _refresh_conv_file_list(self):
+        for w in self._conv_file_frame.winfo_children():
+            w.destroy()
+        for path in self._conv_files:
+            row = ttk.Frame(self._conv_file_frame)
+            row.pack(fill="x", padx=4, pady=1)
+            row.columnconfigure(0, weight=1)
+            ttk.Label(row, text=path, font=FS, anchor="w").grid(
+                row=0, column=0, sticky="ew"
+            )
+            ttk.Button(
+                row, text="移除", width=5,
+                command=lambda p=path: self._conv_remove_file(p),
+            ).grid(row=0, column=1, padx=(4, 0))
+        n = len(self._conv_files)
+        self._conv_count_label.config(
+            text=f"已選 {n} 個檔案" if n > 0 else "未選擇任何檔案"
+        )
+        self._conv_btn.config(state="normal" if n > 0 else "disabled")
+        self._conv_canvas.yview_moveto(0)
+
+    def _on_conv_start(self):
+        if not self._conv_files:
+            return
+        files = list(self._conv_files)
+        output_mode = self._conv_output_var.get()
+        self._conv_btn.config(state="disabled")
+        self._conv_log.config(state="normal")
+        self._conv_log.delete("1.0", "end")
+        self._conv_log.config(state="disabled")
+        self._set_status(f"轉換中... 共 {len(files)} 個檔案", "info")
+        threading.Thread(
+            target=_conv_worker,
+            args=(files, output_mode, self.msg_queue),
+            daemon=True,
+        ).start()
 
     def _set_status(self, msg: str, level: str = "info"):
         self.msg_queue.put(("status", (msg, level)))
@@ -640,6 +779,26 @@ class App:
                         level = "success"
                         suffix = ""
                     self._set_status(f"下載完成 {success_count}/{total}{suffix}", level)
+
+                elif kind == "conv_log":
+                    _, ok, filename, detail = msg
+                    icon = "✅" if ok else "❌"
+                    line = f"{icon} {filename}"
+                    if detail:
+                        line += f"（{detail}）"
+                    self._conv_log.config(state="normal")
+                    self._conv_log.insert("end", line + "\n")
+                    self._conv_log.see("end")
+                    self._conv_log.config(state="disabled")
+
+                elif kind == "conv_done":
+                    _, success, fail = msg
+                    self._conv_btn.config(
+                        state="normal" if self._conv_files else "disabled"
+                    )
+                    total = success + fail
+                    level = "success" if fail == 0 else "error"
+                    self._set_status(f"轉換完成 {success}/{total}", level)
 
                 elif kind == "status":
                     smsg, level = msg[1]
