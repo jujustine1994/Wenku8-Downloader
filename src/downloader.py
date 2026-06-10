@@ -46,7 +46,7 @@ def run_download_all(aid: str, book_name: str, volumes: list[dict],
                      output_dir: str, msg_queue: queue.Queue) -> None:
     total = len(volumes)
     success = 0
-    fail_list = []
+    fail_volumes: list[dict] = []
     pad = max(len(str(total)), 2)
 
     for i, vol in enumerate(volumes, 1):
@@ -58,7 +58,7 @@ def run_download_all(aid: str, book_name: str, volumes: list[dict],
             success += 1
             msg_queue.put(("log", "ok", index_str, vol["name"], ""))
         else:
-            fail_list.append(vol["name"])
-            msg_queue.put(("log", "fail", index_str, vol["name"], "retry 3x 失敗"))
+            fail_volumes.append(vol)
+            msg_queue.put(("log", "fail", index_str, vol["name"], f"retry {RETRY_COUNT}x 失敗"))
 
-    msg_queue.put(("done", success, fail_list))
+    msg_queue.put(("done", success, fail_volumes))

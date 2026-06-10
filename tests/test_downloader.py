@@ -80,4 +80,5 @@ def test_run_download_all_messages(tmp_path):
     assert "progress" in types
     assert "log" in types
     assert messages[-1][0] == "done"
-    assert messages[-1][1] == 2  # success count
+    assert messages[-1][1] == 2       # success count
+    assert messages[-1][2] == []      # no failures (list of dicts)

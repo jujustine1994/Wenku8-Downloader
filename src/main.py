@@ -86,6 +86,7 @@ class App:
 
         self.msg_queue: queue.Queue = queue.Queue()
         self._volumes = []
+        self._fail_volumes: list = []
         self._aid = None
         self._book_name = None
         self._current_theme = self._load_config().get("theme", "light")
@@ -177,6 +178,10 @@ class App:
             btn_row, text="下載選取", command=self._on_download, width=10, state="disabled"
         )
         self.btn_download.pack(side="right", ipady=4)
+        self.btn_retry = ttk.Button(
+            btn_row, text="重試失敗", command=self._on_retry, width=10, state="disabled"
+        )
+        self.btn_retry.pack(side="right", ipady=4, padx=(0, 6))
 
         # === 進度 ===
         frame_progress = ttk.LabelFrame(self.root, text=" 進度 ", padding=8)
@@ -432,6 +437,33 @@ class App:
             daemon=True,
         ).start()
 
+    def _on_retry(self):
+        if not self._fail_volumes:
+            return
+        vols = list(self._fail_volumes)
+        self._fail_volumes = []
+        self.btn_retry.config(state="disabled", text="重試失敗")
+        self.btn_download.config(state="disabled")
+        self.btn_load.config(state="disabled")
+        self.btn_select_all.config(state="disabled")
+        self.btn_deselect_all.config(state="disabled")
+        self.log_text.config(state="normal")
+        self.log_text.insert("end", f"\n── 重試 {len(vols)} 卷 ──\n")
+        self.log_text.see("end")
+        self.log_text.config(state="disabled")
+        self.progress_bar["value"] = 0
+        self.progress_bar["maximum"] = len(vols)
+        self._set_status(f"重試中... 共 {len(vols)} 卷", "info")
+        output_dir = os.path.join(
+            os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+            OUTPUT_DIR,
+        )
+        threading.Thread(
+            target=run_download_all,
+            args=(self._aid, self._book_name, vols, output_dir, self.msg_queue),
+            daemon=True,
+        ).start()
+
     # ---- Queue 輪詢 ----
 
     def _poll_queue(self):
@@ -491,17 +523,26 @@ class App:
                     self.log_text.config(state="disabled")
 
                 elif kind == "done":
-                    _, success_count, fail_list = msg
-                    total = success_count + len(fail_list)
+                    _, success_count, fail_volumes = msg
+                    fail_count = len(fail_volumes)
+                    total = success_count + fail_count
+                    self._fail_volumes = fail_volumes
                     self.btn_load.config(state="normal")
                     self.btn_download.config(state="normal")
                     self.btn_select_all.config(state="normal")
                     self.btn_deselect_all.config(state="normal")
+                    if fail_count:
+                        self.btn_retry.config(
+                            state="normal", text=f"重試 {fail_count} 卷失敗"
+                        )
+                    else:
+                        self.btn_retry.config(state="disabled", text="重試失敗")
                     self.progress_bar["value"] = total
                     self.progress_label.config(text=f"完成 {success_count}/{total} 卷")
-                    if fail_list:
+                    if fail_volumes:
                         level = "error"
-                        suffix = f"，失敗：{', '.join(fail_list)}"
+                        names = ", ".join(v["name"] for v in fail_volumes)
+                        suffix = f"，失敗：{names}"
                     else:
                         level = "success"
                         suffix = ""
