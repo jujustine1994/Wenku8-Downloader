@@ -136,6 +136,7 @@ def test_download_converts_to_traditional(tmp_path):
     fp = str(tmp_path / "vol.txt")
     with patch("src.downloader._get_session", return_value=session):
         assert download_volume("1861", 65280, fp) is True
-    text = open(fp, encoding="utf-8").read()
+    with open(fp, encoding="utf-8") as f:
+        text = f.read()
     assert "軟體" in text
     assert "软件" not in text
