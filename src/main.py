@@ -95,6 +95,7 @@ class App:
         self.msg_queue: queue.Queue = queue.Queue()
         self._volumes = []
         self._fail_volumes: list = []
+        self._conv_files: list[str] = []
         self._aid = None
         self._book_name = None
         _cfg = self._load_config()
@@ -112,9 +113,19 @@ class App:
     def _build_ui(self):
         pad = {"padx": 14, "pady": 6}
         self.root.columnconfigure(0, weight=1)
+        self.root.rowconfigure(0, weight=1)
+
+        self._notebook = ttk.Notebook(self.root)
+        self._notebook.grid(row=0, column=0, sticky="nsew")
+
+        tab_download = ttk.Frame(self._notebook)
+        self._notebook.add(tab_download, text="  下載  ")
+        tab_download.columnconfigure(0, weight=1)
+        tab_download.rowconfigure(1, weight=1)
+        tab_download.rowconfigure(3, weight=1)
 
         # === URL 輸入區 ===
-        frame_url = ttk.LabelFrame(self.root, text=" 書籍目錄網址 ", padding=8)
+        frame_url = ttk.LabelFrame(tab_download, text=" 書籍目錄網址 ", padding=8)
         frame_url.grid(row=0, column=0, sticky="ew", **pad)
         frame_url.columnconfigure(0, weight=1)
 
@@ -146,11 +157,10 @@ class App:
         ).grid(row=0, column=2)
 
         # === 卷列表（勾選清單）===
-        frame_volumes = ttk.LabelFrame(self.root, text=" 卷列表 ", padding=8)
+        frame_volumes = ttk.LabelFrame(tab_download, text=" 卷列表 ", padding=8)
         frame_volumes.grid(row=1, column=0, sticky="nsew", padx=14, pady=(0, 6))
         frame_volumes.columnconfigure(0, weight=1)
         frame_volumes.rowconfigure(1, weight=1)
-        self.root.rowconfigure(1, weight=1)
 
         self.title_label = ttk.Label(
             frame_volumes, text="（輸入網址後點「載入」）", font=FS
@@ -211,7 +221,7 @@ class App:
         self.btn_retry.pack(side="right", ipady=4, padx=(0, 6))
 
         # === 進度 ===
-        frame_progress = ttk.LabelFrame(self.root, text=" 進度 ", padding=8)
+        frame_progress = ttk.LabelFrame(tab_download, text=" 進度 ", padding=8)
         frame_progress.grid(row=2, column=0, sticky="ew", padx=14, pady=(0, 6))
         frame_progress.columnconfigure(0, weight=1)
 
@@ -221,16 +231,19 @@ class App:
         self.progress_bar.pack(fill="x", pady=(4, 0))
 
         # === 記錄 ===
-        frame_log = ttk.LabelFrame(self.root, text=" 記錄 ", padding=8)
+        frame_log = ttk.LabelFrame(tab_download, text=" 記錄 ", padding=8)
         frame_log.grid(row=3, column=0, sticky="nsew", padx=14, pady=(0, 6))
         frame_log.columnconfigure(0, weight=1)
         frame_log.rowconfigure(0, weight=1)
-        self.root.rowconfigure(3, weight=1)
 
         self.log_text = scrolledtext.ScrolledText(
             frame_log, width=60, height=8, state="disabled", font=FM
         )
         self.log_text.pack(fill="both", expand=True)
+
+        tab_convert = ttk.Frame(self._notebook)
+        self._notebook.add(tab_convert, text="  轉換  ")
+        self._build_convert_tab(tab_convert)
 
         # === Status Bar ===
         sep = ttk.Separator(self.root, orient="horizontal")
@@ -248,6 +261,9 @@ class App:
             self._status_bar.config(wraplength=w - 20)
             self.title_label.config(wraplength=w - 40)
         self.root.bind("<Configure>", _on_root_resize)
+
+    def _build_convert_tab(self, tab: ttk.Frame):
+        pass
 
     def _set_status(self, msg: str, level: str = "info"):
         self.msg_queue.put(("status", (msg, level)))
