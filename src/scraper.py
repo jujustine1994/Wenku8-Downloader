@@ -1,20 +1,35 @@
+import re
 import urllib.parse
-import requests
 from bs4 import BeautifulSoup
-from src.config import CATALOG_BASE_URL, HEADERS
+from curl_cffi import requests as cf_requests
+from src.config import CATALOG_BASE_URL
 
 
 def parse_aid_from_url(url: str) -> str:
+    url = url.strip()
+
+    # 純數字書號，如 "1861"
+    if re.fullmatch(r"\d+", url):
+        return url
+
+    # reader.php?aid=XXXX 或 ...&aid=XXXX
     parsed = urllib.parse.urlparse(url)
     params = urllib.parse.parse_qs(parsed.query)
-    if "aid" not in params:
-        raise ValueError(f"No 'aid' parameter in URL: {url}")
-    return params["aid"][0]
+    if "aid" in params:
+        return params["aid"][0]
+
+    # wenku8.net/book/1861.htm 或 /novel/1861/
+    m = re.search(r"/(?:book|novel)/(\d+)", url)
+    if m:
+        return m.group(1)
+
+    raise ValueError("無法識別書號，請貼上目錄網址或直接輸入書號數字")
 
 
 def fetch_catalog(aid: str) -> BeautifulSoup:
     url = f"{CATALOG_BASE_URL}?aid={aid}"
-    resp = requests.get(url, headers=HEADERS, timeout=15)
+    # impersonate="chrome120" 模擬 Chrome TLS 指紋，繞過 Cloudflare Bot Management
+    resp = cf_requests.get(url, impersonate="chrome120", timeout=30)
     resp.raise_for_status()
     resp.encoding = "utf-8"
     return BeautifulSoup(resp.text, "lxml")

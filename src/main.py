@@ -23,6 +23,9 @@ F  = ("Microsoft JhengHei", 12)
 FS = ("Microsoft JhengHei", 11)
 FB = ("Microsoft JhengHei", 12, "bold")
 FM = ("Consolas", 12)
+FH = ("Microsoft JhengHei", 10)
+
+URL_PLACEHOLDER = "https://www.wenku8.net/modules/article/reader.php?aid=XXXX"
 
 THEMES = {
     "light": {
@@ -114,7 +117,7 @@ class App:
             row=0, column=2, padx=(4, 0)
         )
 
-        # === 卷列表 ===
+        # === 卷列表（勾選清單）===
         frame_volumes = ttk.LabelFrame(self.root, text=" 卷列表 ", padding=8)
         frame_volumes.grid(row=1, column=0, sticky="nsew", padx=14, pady=(0, 6))
         frame_volumes.columnconfigure(0, weight=1)
@@ -126,23 +129,54 @@ class App:
         )
         self.title_label.grid(row=0, column=0, sticky="w", pady=(0, 4))
 
-        list_frame = ttk.Frame(frame_volumes)
-        list_frame.grid(row=1, column=0, sticky="nsew")
-        list_frame.columnconfigure(0, weight=1)
-        list_frame.rowconfigure(0, weight=1)
+        # Canvas + scrollbar for checkbox list
+        list_outer = ttk.Frame(frame_volumes)
+        list_outer.grid(row=1, column=0, sticky="nsew")
+        list_outer.columnconfigure(0, weight=1)
+        list_outer.rowconfigure(0, weight=1)
 
-        self.vol_listbox = tk.Listbox(list_frame, font=FM, height=8, selectmode="extended")
-        self.vol_listbox.grid(row=0, column=0, sticky="nsew")
-        sb = ttk.Scrollbar(list_frame, orient="vertical", command=self.vol_listbox.yview)
-        sb.grid(row=0, column=1, sticky="ns")
-        self.vol_listbox.configure(yscrollcommand=sb.set)
+        self._check_canvas = tk.Canvas(list_outer, highlightthickness=0, height=180)
+        cb_sb = ttk.Scrollbar(list_outer, orient="vertical", command=self._check_canvas.yview)
+        self._check_canvas.configure(yscrollcommand=cb_sb.set)
+        self._check_canvas.grid(row=0, column=0, sticky="nsew")
+        cb_sb.grid(row=0, column=1, sticky="ns")
 
-        btn_row = ttk.Frame(frame_volumes)
-        btn_row.grid(row=2, column=0, sticky="e", pady=(6, 0))
-        self.btn_download = ttk.Button(
-            btn_row, text="下載全部", command=self._on_download, width=12, state="disabled"
+        self._cb_frame = ttk.Frame(self._check_canvas)
+        self._cb_window = self._check_canvas.create_window(
+            (0, 0), window=self._cb_frame, anchor="nw"
         )
-        self.btn_download.pack(ipady=4)
+        self._cb_frame.bind(
+            "<Configure>",
+            lambda e: self._check_canvas.configure(
+                scrollregion=self._check_canvas.bbox("all")
+            ),
+        )
+        self._check_canvas.bind(
+            "<Configure>",
+            lambda e: self._check_canvas.itemconfig(self._cb_window, width=e.width),
+        )
+        self._check_canvas.bind("<MouseWheel>", self._on_canvas_scroll)
+
+        self._check_vars: list[tk.BooleanVar] = []
+
+        # Button row: 全選 | 全不選 | (spacer) | 下載選取
+        btn_row = ttk.Frame(frame_volumes)
+        btn_row.grid(row=2, column=0, sticky="ew", pady=(6, 0))
+
+        self.btn_select_all = ttk.Button(
+            btn_row, text="全選", width=6, state="disabled",
+            command=lambda: self._select_all(True),
+        )
+        self.btn_select_all.pack(side="left", ipady=4, padx=(0, 4))
+        self.btn_deselect_all = ttk.Button(
+            btn_row, text="全不選", width=6, state="disabled",
+            command=lambda: self._select_all(False),
+        )
+        self.btn_deselect_all.pack(side="left", ipady=4)
+        self.btn_download = ttk.Button(
+            btn_row, text="下載選取", command=self._on_download, width=10, state="disabled"
+        )
+        self.btn_download.pack(side="right", ipady=4)
 
         # === 進度 ===
         frame_progress = ttk.LabelFrame(self.root, text=" 進度 ", padding=8)
@@ -174,6 +208,12 @@ class App:
             font=FS, foreground="gray"
         )
         self._status_bar.grid(row=99, column=0, sticky="ew")
+        # 防止長錯誤訊息撐寬視窗：讓 label 跟著視窗寬度折行而非撐大視窗
+        self.root.bind(
+            "<Configure>",
+            lambda e: self._status_bar.config(wraplength=self.root.winfo_width() - 20)
+            if e.widget is self.root else None,
+        )
 
     def _set_status(self, msg: str, level: str = "info"):
         self.msg_queue.put(("status", (msg, level)))
@@ -300,6 +340,33 @@ class App:
         except Exception:
             pass
 
+    # ---- 勾選清單 ----
+
+    def _build_checkbox_list(self, volumes: list[dict]):
+        for w in self._cb_frame.winfo_children():
+            w.destroy()
+        self._check_vars = []
+        pad = max(len(str(len(volumes))), 2)
+        for v in volumes:
+            var = tk.BooleanVar(value=True)
+            self._check_vars.append(var)
+            cb = ttk.Checkbutton(
+                self._cb_frame,
+                text=f"  {str(v['index']).zfill(pad)}  {v['name']}",
+                variable=var,
+                font=FM,
+            )
+            cb.pack(anchor="w", fill="x", padx=4, pady=1)
+            cb.bind("<MouseWheel>", self._on_canvas_scroll)
+        self._check_canvas.yview_moveto(0)
+
+    def _select_all(self, state: bool):
+        for var in self._check_vars:
+            var.set(state)
+
+    def _on_canvas_scroll(self, event):
+        self._check_canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
+
     # ---- 載入目錄 ----
 
     def _on_load(self):
@@ -313,7 +380,8 @@ class App:
         self._aid = aid
         self.btn_load.config(state="disabled")
         self.btn_download.config(state="disabled")
-        self.vol_listbox.delete(0, "end")
+        self.btn_select_all.config(state="disabled")
+        self.btn_deselect_all.config(state="disabled")
         self.title_label.config(text="載入中...")
         self.progress_bar.config(mode="indeterminate")
         self.progress_bar.start(10)
@@ -336,16 +404,22 @@ class App:
     def _on_download(self):
         if not self._volumes:
             return
+        selected = [v for v, var in zip(self._volumes, self._check_vars) if var.get()]
+        if not selected:
+            self._set_status("請至少勾選一卷", "error")
+            return
         self.btn_download.config(state="disabled")
         self.btn_load.config(state="disabled")
+        self.btn_select_all.config(state="disabled")
+        self.btn_deselect_all.config(state="disabled")
         self.log_text.config(state="normal")
         self.log_text.delete("1.0", "end")
         self.log_text.config(state="disabled")
         self.progress_bar.stop()
         self.progress_bar.config(mode="determinate")
         self.progress_bar["value"] = 0
-        self.progress_bar["maximum"] = len(self._volumes)
-        self._set_status("下載中...", "info")
+        self.progress_bar["maximum"] = len(selected)
+        self._set_status(f"下載中... 共 {len(selected)} 卷", "info")
 
         output_dir = os.path.join(
             os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
@@ -353,7 +427,7 @@ class App:
         )
         threading.Thread(
             target=run_download_all,
-            args=(self._aid, self._book_name, list(self._volumes), output_dir, self.msg_queue),
+            args=(self._aid, self._book_name, selected, output_dir, self.msg_queue),
             daemon=True,
         ).start()
 
@@ -372,17 +446,14 @@ class App:
                     self.title_label.config(
                         text=f"書名：{book_name}　共 {len(volumes)} 卷"
                     )
-                    self.vol_listbox.delete(0, "end")
-                    pad = max(len(str(len(volumes))), 2)
-                    for v in volumes:
-                        self.vol_listbox.insert(
-                            "end", f"  {str(v['index']).zfill(pad)}  {v['name']}"
-                        )
+                    self._build_checkbox_list(volumes)
                     self.progress_bar.stop()
                     self.progress_bar.config(mode="determinate")
-                    self.progress_label.config(text="載入完成，按「下載全部」開始")
+                    self.progress_label.config(text="載入完成，勾選要下載的卷後按「下載選取」")
                     self.btn_load.config(state="normal")
                     self.btn_download.config(state="normal")
+                    self.btn_select_all.config(state="normal")
+                    self.btn_deselect_all.config(state="normal")
                     self._set_status(
                         f"已載入：{book_name}，共 {len(volumes)} 卷", "success"
                     )
@@ -394,7 +465,10 @@ class App:
                     self.title_label.config(text="載入失敗")
                     self.progress_label.config(text="載入失敗，請確認網址")
                     self.btn_load.config(state="normal")
-                    self._set_status(f"載入失敗：{err}", "error")
+                    self.btn_select_all.config(state="disabled")
+                    self.btn_deselect_all.config(state="disabled")
+                    hint = "（403 錯誤：網站拒絕存取，可稍後再試）" if "403" in err else ""
+                    self._set_status(f"載入失敗：{err}{hint}", "error")
 
                 elif kind == "progress":
                     _, current, total, vol_name = msg
@@ -417,9 +491,11 @@ class App:
 
                 elif kind == "done":
                     _, success_count, fail_list = msg
-                    total = len(self._volumes)
+                    total = success_count + len(fail_list)
                     self.btn_load.config(state="normal")
                     self.btn_download.config(state="normal")
+                    self.btn_select_all.config(state="normal")
+                    self.btn_deselect_all.config(state="normal")
                     self.progress_bar["value"] = total
                     self.progress_label.config(text=f"完成 {success_count}/{total} 卷")
                     if fail_list:
