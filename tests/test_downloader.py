@@ -27,7 +27,8 @@ def test_download_success(tmp_path):
     fp = str(tmp_path / "vol.txt")
     with patch("src.downloader._get_session", return_value=session):
         assert download_volume("1861", 65280, fp) is True
-    assert open(fp, "rb").read() == CONTENT
+    assert os.path.exists(fp)
+    assert os.path.getsize(fp) > 0
 
 
 def test_download_retry_then_success(tmp_path):
@@ -125,3 +126,16 @@ def test_run_download_all_passes_retry_to_volume(tmp_path):
     log_msg = next(m for m in msgs if m[0] == "log")
     assert "2x" in log_msg[4]
     assert session.get.call_count == 2  # retry_count=2 → called twice
+
+
+def test_download_converts_to_traditional(tmp_path):
+    """下載後內容自動轉為繁體中文"""
+    # 60 bytes 以上才能通過 HTML 偵測（< 50 bytes 會被擋）
+    simplified_content = ("软件" * 30).encode("utf-8")
+    session = _mock_session([_ok_resp(content=simplified_content)])
+    fp = str(tmp_path / "vol.txt")
+    with patch("src.downloader._get_session", return_value=session):
+        assert download_volume("1861", 65280, fp) is True
+    text = open(fp, encoding="utf-8").read()
+    assert "軟體" in text
+    assert "软件" not in text

@@ -3,6 +3,7 @@ import time
 import queue
 from curl_cffi import requests as cf_requests
 from src.config import DOWNLOAD_BASE_URL, RETRY_COUNT, RETRY_DELAY
+from src.converter import convert_to_traditional
 
 _session: cf_requests.Session | None = None
 
@@ -26,8 +27,10 @@ def download_volume(aid: str, vid: int, filepath: str,
             if len(resp.content) < 50 or resp.content[:5].strip().startswith(b"<"):
                 raise ValueError("Response is HTML error page, not TXT")
             os.makedirs(os.path.dirname(filepath), exist_ok=True)
-            with open(filepath, "wb") as f:
-                f.write(resp.content)
+            text = resp.content.decode("utf-8", errors="replace")
+            converted = convert_to_traditional(text)
+            with open(filepath, "w", encoding="utf-8") as f:
+                f.write(converted)
             return True
         except Exception:
             if attempt < retry_count:
