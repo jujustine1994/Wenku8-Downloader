@@ -22,7 +22,7 @@ CONFIG_PATH = os.path.join(SCRIPT_DIR, ".tool_config.json")
 
 
 def resolve_output_dir(config: dict, project_root: str) -> str:
-    raw = config.get("output_dir", "")
+    raw = config.get("output_dir", "").strip()
     if raw:
         return raw
     return os.path.join(project_root, OUTPUT_DIR)
