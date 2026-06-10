@@ -318,6 +318,7 @@ class App:
                 self._conv_file_window, width=e.width
             ),
         )
+        self._conv_canvas.bind("<MouseWheel>", self._on_canvas_scroll)
 
         # 輸出模式 + 開始按鈕
         frame_output = ttk.Frame(tab)
@@ -459,6 +460,7 @@ class App:
             style.configure(w, **kw)
 
         self.log_text.config(bg=t["log_bg"], fg=t["log_fg"], insertbackground=t["log_fg"])
+        self._conv_log.config(bg=t["log_bg"], fg=t["log_fg"], insertbackground=t["log_fg"])
         self._current_theme = theme_key
 
     # ---- 設定視窗 ----
