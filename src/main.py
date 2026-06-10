@@ -17,7 +17,15 @@ except Exception:
     pass
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+PROJECT_ROOT = os.path.dirname(SCRIPT_DIR)
 CONFIG_PATH = os.path.join(SCRIPT_DIR, ".tool_config.json")
+
+
+def resolve_output_dir(config: dict, project_root: str) -> str:
+    raw = config.get("output_dir", "")
+    if raw:
+        return raw
+    return os.path.join(project_root, OUTPUT_DIR)
 
 F  = ("Microsoft JhengHei", 12)
 FS = ("Microsoft JhengHei", 11)
