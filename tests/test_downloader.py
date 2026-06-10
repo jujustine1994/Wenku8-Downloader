@@ -1,8 +1,10 @@
 import os
 import queue
+import inspect
 from unittest.mock import patch, MagicMock
 import pytest
 from src.downloader import download_volume, build_filepath, run_download_all
+from src.config import RETRY_COUNT, RETRY_DELAY
 
 CONTENT = b"A" * 500
 
@@ -82,3 +84,43 @@ def test_run_download_all_messages(tmp_path):
     assert messages[-1][0] == "done"
     assert messages[-1][1] == 2       # success count
     assert messages[-1][2] == []      # no failures (list of dicts)
+
+
+def test_download_volume_has_retry_params():
+    sig = inspect.signature(download_volume)
+    assert sig.parameters["retry_count"].default == RETRY_COUNT
+    assert sig.parameters["retry_delay"].default == RETRY_DELAY
+
+
+def test_run_download_all_has_retry_params():
+    sig = inspect.signature(run_download_all)
+    assert sig.parameters["retry_count"].default == RETRY_COUNT
+    assert sig.parameters["retry_delay"].default == RETRY_DELAY
+
+
+def test_download_volume_respects_custom_retry_count(tmp_path):
+    """retry_count=1 時只呼叫一次 session.get（失敗後不重試）"""
+    session = _mock_session([Exception("fail")])
+    fp = str(tmp_path / "vol.txt")
+    with patch("src.downloader._get_session", return_value=session), \
+         patch("src.downloader.time.sleep"):
+        result = download_volume("1861", 65280, fp, retry_count=1, retry_delay=0)
+    assert result is False
+    assert session.get.call_count == 1
+
+
+def test_run_download_all_passes_retry_to_volume(tmp_path):
+    """run_download_all 傳入的 retry_count 會影響 log 訊息中顯示的次數"""
+    session = MagicMock()
+    session.get.side_effect = Exception("fail")
+    volumes = [{"index": 1, "name": "第一卷", "first_cid": 100, "vid": 99}]
+    q = queue.Queue()
+    with patch("src.downloader._get_session", return_value=session), \
+         patch("src.downloader.time.sleep"):
+        run_download_all("1", "TestBook", volumes, str(tmp_path), q,
+                         retry_count=2, retry_delay=0)
+    msgs = []
+    while not q.empty():
+        msgs.append(q.get())
+    log_msg = next(m for m in msgs if m[0] == "log")
+    assert "2x" in log_msg[4]

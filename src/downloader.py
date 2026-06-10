@@ -14,9 +14,11 @@ def _get_session() -> cf_requests.Session:
     return _session
 
 
-def download_volume(aid: str, vid: int, filepath: str) -> bool:
+def download_volume(aid: str, vid: int, filepath: str,
+                    retry_count: int = RETRY_COUNT,
+                    retry_delay: int = RETRY_DELAY) -> bool:
     url = f"{DOWNLOAD_BASE_URL}?aid={aid}&vid={vid}&charset=utf-8"
-    for attempt in range(1, RETRY_COUNT + 1):
+    for attempt in range(1, retry_count + 1):
         try:
             resp = _get_session().get(url, impersonate="chrome120", timeout=30)
             resp.raise_for_status()
@@ -28,8 +30,8 @@ def download_volume(aid: str, vid: int, filepath: str) -> bool:
                 f.write(resp.content)
             return True
         except Exception:
-            if attempt < RETRY_COUNT:
-                time.sleep(RETRY_DELAY)
+            if attempt < retry_count:
+                time.sleep(retry_delay)
     return False
 
 
@@ -43,7 +45,9 @@ def build_filepath(output_dir: str, book_name: str, volume_index: int,
 
 
 def run_download_all(aid: str, book_name: str, volumes: list[dict],
-                     output_dir: str, msg_queue: queue.Queue) -> None:
+                     output_dir: str, msg_queue: queue.Queue,
+                     retry_count: int = RETRY_COUNT,
+                     retry_delay: int = RETRY_DELAY) -> None:
     total = len(volumes)
     success = 0
     fail_volumes: list[dict] = []
@@ -52,13 +56,13 @@ def run_download_all(aid: str, book_name: str, volumes: list[dict],
     for i, vol in enumerate(volumes, 1):
         msg_queue.put(("progress", i, total, vol["name"]))
         filepath = build_filepath(output_dir, book_name, vol["index"], vol["name"], total)
-        ok = download_volume(aid, vol["vid"], filepath)
+        ok = download_volume(aid, vol["vid"], filepath, retry_count, retry_delay)
         index_str = str(vol["index"]).zfill(pad)
         if ok:
             success += 1
             msg_queue.put(("log", "ok", index_str, vol["name"], ""))
         else:
             fail_volumes.append(vol)
-            msg_queue.put(("log", "fail", index_str, vol["name"], f"retry {RETRY_COUNT}x 失敗"))
+            msg_queue.put(("log", "fail", index_str, vol["name"], f"retry {retry_count}x 失敗"))
 
     msg_queue.put(("done", success, fail_volumes))
