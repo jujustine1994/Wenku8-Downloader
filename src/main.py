@@ -4,11 +4,11 @@ import os
 import queue
 import threading
 import tkinter as tk
-from tkinter import ttk, scrolledtext
+from tkinter import ttk, scrolledtext, messagebox
 
 from src.config import OUTPUT_DIR, RETRY_COUNT, RETRY_DELAY
 from src.scraper import parse_aid_from_url, fetch_catalog, parse_book_title, parse_volumes
-from src.downloader import run_download_all
+from src.downloader import run_download_all, run_repair_all
 
 # 高 DPI 感知（4K/2K 螢幕不模糊，需在 Tk() 前呼叫）
 try:
@@ -113,6 +113,7 @@ class App:
         self._fname_index = _cfg.get("filename_index", "padded")
         self._fname_book_name = bool(_cfg.get("filename_book_name", True))
         self._fname_separator = _cfg.get("filename_separator", " ")
+        self._garbled_volumes: list = []
         self._browsing = False
 
         self._build_ui()
@@ -229,6 +230,10 @@ class App:
             btn_row, text="重試失敗", command=self._on_retry, width=10, state="disabled"
         )
         self.btn_retry.pack(side="right", ipady=4, padx=(0, 6))
+        self.btn_repair = ttk.Button(
+            btn_row, text="修復亂碼", command=self._on_repair, width=10, state="disabled"
+        )
+        self.btn_repair.pack(side="right", ipady=4, padx=(0, 6))
 
         # === 進度 ===
         frame_progress = ttk.LabelFrame(tab_download, text=" 進度 ", padding=8)
@@ -724,6 +729,8 @@ class App:
         self.btn_load.config(state="disabled")
         self.btn_select_all.config(state="disabled")
         self.btn_deselect_all.config(state="disabled")
+        self._garbled_volumes = []
+        self.btn_repair.config(state="disabled", text="修復亂碼")
         self.log_text.config(state="normal")
         self.log_text.delete("1.0", "end")
         self.log_text.config(state="disabled")
@@ -748,6 +755,7 @@ class App:
         vols = list(self._fail_volumes)
         self._fail_volumes = []
         self.btn_retry.config(state="disabled", text="重試失敗")
+        self.btn_repair.config(state="disabled", text="修復亂碼")
         self.btn_download.config(state="disabled")
         self.btn_load.config(state="disabled")
         self.btn_select_all.config(state="disabled")
@@ -762,6 +770,39 @@ class App:
         output_dir = self._path_var.get()
         threading.Thread(
             target=run_download_all,
+            args=(self._aid, self._book_name, vols, output_dir, self.msg_queue,
+                  self._retry_count, self._retry_delay,
+                  self._fname_index, self._fname_book_name, self._fname_separator),
+            daemon=True,
+        ).start()
+
+    def _on_repair(self):
+        if not self._garbled_volumes:
+            return
+        vols = list(self._garbled_volumes)
+        names = "\n".join(f"  · {v['name']}" for v in vols)
+        if not messagebox.askokcancel(
+            "亂碼修復",
+            f"以下 {len(vols)} 卷偵測到亂碼：\n{names}\n\n嘗試換編碼修復？"
+        ):
+            return
+        self._garbled_volumes = []
+        self.btn_repair.config(state="disabled", text="修復亂碼")
+        self.btn_retry.config(state="disabled", text="重試失敗")
+        self.btn_download.config(state="disabled")
+        self.btn_load.config(state="disabled")
+        self.btn_select_all.config(state="disabled")
+        self.btn_deselect_all.config(state="disabled")
+        self.log_text.config(state="normal")
+        self.log_text.insert("end", f"\n── 修復亂碼 {len(vols)} 卷 ──\n")
+        self.log_text.see("end")
+        self.log_text.config(state="disabled")
+        self.progress_bar["value"] = 0
+        self.progress_bar["maximum"] = len(vols)
+        self._set_status(f"修復中... 共 {len(vols)} 卷", "info")
+        output_dir = self._path_var.get()
+        threading.Thread(
+            target=run_repair_all,
             args=(self._aid, self._book_name, vols, output_dir, self.msg_queue,
                   self._retry_count, self._retry_delay,
                   self._fname_index, self._fname_book_name, self._fname_separator),
@@ -817,7 +858,7 @@ class App:
 
                 elif kind == "log":
                     _, status, index_str, vol_name, detail = msg
-                    icon = "✅" if status == "ok" else "❌"
+                    icon = "✅" if status == "ok" else ("⚠️" if status == "warn" else "❌")
                     line = f"{icon} {index_str} {vol_name}"
                     if detail:
                         line += f"（{detail}）"
@@ -827,10 +868,12 @@ class App:
                     self.log_text.config(state="disabled")
 
                 elif kind == "done":
-                    _, success_count, fail_volumes = msg
+                    _, success_count, fail_volumes, garbled_volumes = msg
                     fail_count = len(fail_volumes)
+                    garbled_count = len(garbled_volumes)
                     total = success_count + fail_count
                     self._fail_volumes = fail_volumes
+                    self._garbled_volumes = garbled_volumes
                     self.btn_load.config(state="normal")
                     self.btn_download.config(state="normal")
                     self.btn_select_all.config(state="normal")
@@ -841,12 +884,22 @@ class App:
                         )
                     else:
                         self.btn_retry.config(state="disabled", text="重試失敗")
+                    if garbled_count:
+                        self.btn_repair.config(
+                            state="normal", text=f"修復亂碼 {garbled_count} 卷"
+                        )
+                    else:
+                        self.btn_repair.config(state="disabled", text="修復亂碼")
                     self.progress_bar["value"] = total
                     self.progress_label.config(text=f"完成 {success_count}/{total} 卷")
-                    if fail_volumes:
-                        level = "error"
-                        names = ", ".join(v["name"] for v in fail_volumes)
-                        suffix = f"，失敗：{names}"
+                    if fail_volumes or garbled_volumes:
+                        level = "error" if fail_volumes else "info"
+                        parts = []
+                        if fail_volumes:
+                            parts.append(f"失敗：{', '.join(v['name'] for v in fail_volumes)}")
+                        if garbled_volumes:
+                            parts.append(f"亂碼：{', '.join(v['name'] for v in garbled_volumes)}")
+                        suffix = "，" + "；".join(parts)
                     else:
                         level = "success"
                         suffix = ""
