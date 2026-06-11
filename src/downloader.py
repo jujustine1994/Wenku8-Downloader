@@ -138,3 +138,35 @@ def run_download_all(aid: str, book_name: str, volumes: list[dict],
             msg_queue.put(("log", "fail", index_str, vol["name"], f"retry {retry_count}x 失敗"))
 
     msg_queue.put(("done", success, fail_volumes, garbled_volumes))
+
+
+def run_repair_all(aid: str, book_name: str, volumes: list[dict],
+                   output_dir: str, msg_queue: queue.Queue,
+                   retry_count: int = RETRY_COUNT,
+                   retry_delay: float = RETRY_DELAY,
+                   index_fmt: str = "padded",
+                   include_book_name: bool = True,
+                   separator: str = " ") -> None:
+    total = len(volumes)
+    success = 0
+    fail_volumes: list[dict] = []
+    garbled_volumes: list[dict] = []
+    pad = max(len(str(total)), 2)
+
+    for i, vol in enumerate(volumes, 1):
+        msg_queue.put(("progress", i, total, vol["name"]))
+        filepath = build_filepath(output_dir, book_name, vol["index"], vol["name"], total,
+                                  index_fmt, include_book_name, separator)
+        index_str = str(vol["index"]).zfill(pad)
+        result = repair_volume(aid, vol["vid"], filepath, retry_count, retry_delay)
+        if result is None:
+            fail_volumes.append(vol)
+            msg_queue.put(("log", "fail", index_str, vol["name"], "修復失敗"))
+        elif result is True:
+            garbled_volumes.append(vol)
+            msg_queue.put(("log", "warn", index_str, vol["name"], "修復後仍有亂碼"))
+        else:
+            success += 1
+            msg_queue.put(("log", "ok", index_str, vol["name"], "已修復"))
+
+    msg_queue.put(("done", success, fail_volumes, garbled_volumes))

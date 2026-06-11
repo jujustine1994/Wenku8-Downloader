@@ -3,7 +3,7 @@ import queue
 import inspect
 from unittest.mock import patch, MagicMock
 import pytest
-from src.downloader import download_volume, build_filepath, run_download_all, check_garbled, repair_volume
+from src.downloader import download_volume, build_filepath, run_download_all, check_garbled, repair_volume, run_repair_all
 from src.config import RETRY_COUNT, RETRY_DELAY
 
 CONTENT = b"A" * 500
@@ -310,3 +310,53 @@ def test_run_download_all_done_has_four_elements(tmp_path):
     assert done_msg[0] == "done"
     assert len(done_msg) == 4
     assert done_msg[3] == []
+
+
+def test_run_repair_all_ok_when_repaired(tmp_path):
+    """repair_volume 回傳 False → ok log，done success=1"""
+    volumes = [{"index": 1, "name": "第一卷", "first_cid": 100, "vid": 99}]
+    q = queue.Queue()
+    with patch("src.downloader.repair_volume", return_value=False):
+        run_repair_all("1", "書名", volumes, str(tmp_path), q)
+    msgs = []
+    while not q.empty():
+        msgs.append(q.get())
+    log_msg = next(m for m in msgs if m[0] == "log")
+    assert log_msg[1] == "ok"
+    assert log_msg[4] == "已修復"
+    done = msgs[-1]
+    assert done[1] == 1
+    assert done[2] == []
+    assert done[3] == []
+
+
+def test_run_repair_all_warn_when_still_garbled(tmp_path):
+    """repair_volume 回傳 True → warn log，done garbled_volumes 有該卷"""
+    vol = {"index": 1, "name": "第一卷", "first_cid": 100, "vid": 99}
+    q = queue.Queue()
+    with patch("src.downloader.repair_volume", return_value=True):
+        run_repair_all("1", "書名", [vol], str(tmp_path), q)
+    msgs = []
+    while not q.empty():
+        msgs.append(q.get())
+    log_msg = next(m for m in msgs if m[0] == "log")
+    assert log_msg[1] == "warn"
+    assert log_msg[4] == "修復後仍有亂碼"
+    done = msgs[-1]
+    assert done[3] == [vol]
+
+
+def test_run_repair_all_fail_on_network_error(tmp_path):
+    """repair_volume 回傳 None → fail log，done fail_volumes 有該卷"""
+    vol = {"index": 1, "name": "第一卷", "first_cid": 100, "vid": 99}
+    q = queue.Queue()
+    with patch("src.downloader.repair_volume", return_value=None):
+        run_repair_all("1", "書名", [vol], str(tmp_path), q)
+    msgs = []
+    while not q.empty():
+        msgs.append(q.get())
+    log_msg = next(m for m in msgs if m[0] == "log")
+    assert log_msg[1] == "fail"
+    done = msgs[-1]
+    assert done[2] == [vol]
+    assert done[3] == []
