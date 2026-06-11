@@ -85,6 +85,7 @@ def test_run_download_all_messages(tmp_path):
     assert messages[-1][0] == "done"
     assert messages[-1][1] == 2       # success count
     assert messages[-1][2] == []      # no failures (list of dicts)
+    assert messages[-1][3] == []      # no garbled volumes
 
 
 def test_download_volume_has_retry_params():
