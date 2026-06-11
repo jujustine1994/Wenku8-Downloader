@@ -271,3 +271,41 @@ def test_repair_volume_returns_none_on_network_failure(tmp_path):
         result = repair_volume("1", 99, fp, retry_count=1)
 
     assert result is None
+
+
+def test_run_download_all_detects_garbled(tmp_path):
+    """下載後含 U+FFFD 的卷發出 warn log 並出現在 done[3]"""
+    garbled_bytes = b"\x80" * 100  # invalid UTF-8 → decoded to U+FFFD chars by download_volume
+
+    session = MagicMock()
+    session.get.return_value = _ok_resp(content=garbled_bytes)
+    volumes = [{"index": 1, "name": "第一卷", "first_cid": 100, "vid": 99}]
+    q = queue.Queue()
+    with patch("src.downloader._get_session", return_value=session):
+        run_download_all("1", "書名", volumes, str(tmp_path), q)
+    msgs = []
+    while not q.empty():
+        msgs.append(q.get())
+    log_msg = next(m for m in msgs if m[0] == "log")
+    assert log_msg[1] == "warn"
+    assert log_msg[4] == "偵測到亂碼"
+    done_msg = msgs[-1]
+    assert done_msg[0] == "done"
+    assert done_msg[3] == [{"index": 1, "name": "第一卷", "first_cid": 100, "vid": 99}]
+
+
+def test_run_download_all_done_has_four_elements(tmp_path):
+    """done 訊息永遠是 4-tuple，無亂碼時 done[3] 為空 list"""
+    session = MagicMock()
+    session.get.return_value = _ok_resp()
+    volumes = [{"index": 1, "name": "第一卷", "first_cid": 100, "vid": 99}]
+    q = queue.Queue()
+    with patch("src.downloader._get_session", return_value=session):
+        run_download_all("1", "書名", volumes, str(tmp_path), q)
+    msgs = []
+    while not q.empty():
+        msgs.append(q.get())
+    done_msg = msgs[-1]
+    assert done_msg[0] == "done"
+    assert len(done_msg) == 4
+    assert done_msg[3] == []

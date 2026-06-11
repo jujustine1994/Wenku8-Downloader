@@ -117,6 +117,7 @@ def run_download_all(aid: str, book_name: str, volumes: list[dict],
     total = len(volumes)
     success = 0
     fail_volumes: list[dict] = []
+    garbled_volumes: list[dict] = []
     pad = max(len(str(total)), 2)
 
     for i, vol in enumerate(volumes, 1):
@@ -127,9 +128,13 @@ def run_download_all(aid: str, book_name: str, volumes: list[dict],
         index_str = str(vol["index"]).zfill(pad)
         if ok:
             success += 1
-            msg_queue.put(("log", "ok", index_str, vol["name"], ""))
+            if check_garbled(filepath):
+                garbled_volumes.append(vol)
+                msg_queue.put(("log", "warn", index_str, vol["name"], "偵測到亂碼"))
+            else:
+                msg_queue.put(("log", "ok", index_str, vol["name"], ""))
         else:
             fail_volumes.append(vol)
             msg_queue.put(("log", "fail", index_str, vol["name"], f"retry {retry_count}x 失敗"))
 
-    msg_queue.put(("done", success, fail_volumes))
+    msg_queue.put(("done", success, fail_volumes, garbled_volumes))
