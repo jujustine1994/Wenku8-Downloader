@@ -115,6 +115,7 @@ class App:
         self._fname_separator = _cfg.get("filename_separator", " ")
         self._garbled_volumes: list = []
         self._repair_mode = False
+        self._skip_event = threading.Event()
         self._browsing = False
 
         self._build_ui()
@@ -235,6 +236,10 @@ class App:
             btn_row, text="修復亂碼", command=self._on_repair, width=10, state="disabled"
         )
         self.btn_repair.pack(side="right", ipady=4, padx=(0, 6))
+        self.btn_skip = ttk.Button(
+            btn_row, text="跳過目前卷", command=self._on_skip, width=10, state="disabled"
+        )
+        self.btn_skip.pack(side="right", ipady=4, padx=(0, 6))
 
         # === 進度 ===
         frame_progress = ttk.LabelFrame(tab_download, text=" 進度 ", padding=8)
@@ -732,7 +737,9 @@ class App:
         self.btn_deselect_all.config(state="disabled")
         self._garbled_volumes = []
         self._repair_mode = False
+        self._skip_event.clear()
         self.btn_repair.config(state="disabled", text="修復亂碼")
+        self.btn_skip.config(state="normal")
         self.log_text.config(state="normal")
         self.log_text.delete("1.0", "end")
         self.log_text.config(state="disabled")
@@ -748,6 +755,7 @@ class App:
             args=(self._aid, self._book_name, selected, output_dir, self.msg_queue,
                   self._retry_count, self._retry_delay,
                   self._fname_index, self._fname_book_name, self._fname_separator),
+            kwargs={"skip_event": self._skip_event},
             daemon=True,
         ).start()
 
@@ -759,6 +767,8 @@ class App:
         self.btn_retry.config(state="disabled", text="重試失敗")
         self.btn_repair.config(state="disabled", text="修復亂碼")
         self._repair_mode = False
+        self._skip_event.clear()
+        self.btn_skip.config(state="normal")
         self.btn_download.config(state="disabled")
         self.btn_load.config(state="disabled")
         self.btn_select_all.config(state="disabled")
@@ -776,6 +786,7 @@ class App:
             args=(self._aid, self._book_name, vols, output_dir, self.msg_queue,
                   self._retry_count, self._retry_delay,
                   self._fname_index, self._fname_book_name, self._fname_separator),
+            kwargs={"skip_event": self._skip_event},
             daemon=True,
         ).start()
 
@@ -812,6 +823,9 @@ class App:
                   self._fname_index, self._fname_book_name, self._fname_separator),
             daemon=True,
         ).start()
+
+    def _on_skip(self):
+        self._skip_event.set()
 
     # ---- Queue 輪詢 ----
 
@@ -862,7 +876,7 @@ class App:
 
                 elif kind == "log":
                     _, status, index_str, vol_name, detail = msg
-                    icon = "✅" if status == "ok" else ("⚠️" if status == "warn" else "❌")
+                    icon = "✅" if status == "ok" else ("⚠️" if status == "warn" else ("⏭️" if status == "skip" else "❌"))
                     line = f"{icon} {index_str} {vol_name}"
                     if detail:
                         line += f"（{detail}）"
@@ -885,6 +899,7 @@ class App:
                     self.btn_download.config(state="normal")
                     self.btn_select_all.config(state="normal")
                     self.btn_deselect_all.config(state="normal")
+                    self.btn_skip.config(state="disabled")
                     if fail_count:
                         self.btn_retry.config(
                             state="normal", text=f"重試 {fail_count} 卷失敗"
