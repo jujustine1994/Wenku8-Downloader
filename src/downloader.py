@@ -60,7 +60,10 @@ def build_filepath(output_dir: str, book_name: str, volume_index: int,
 def run_download_all(aid: str, book_name: str, volumes: list[dict],
                      output_dir: str, msg_queue: queue.Queue,
                      retry_count: int = RETRY_COUNT,
-                     retry_delay: float = RETRY_DELAY) -> None:
+                     retry_delay: float = RETRY_DELAY,
+                     index_fmt: str = "padded",
+                     include_book_name: bool = True,
+                     separator: str = " ") -> None:
     total = len(volumes)
     success = 0
     fail_volumes: list[dict] = []
@@ -68,7 +71,8 @@ def run_download_all(aid: str, book_name: str, volumes: list[dict],
 
     for i, vol in enumerate(volumes, 1):
         msg_queue.put(("progress", i, total, vol["name"]))
-        filepath = build_filepath(output_dir, book_name, vol["index"], vol["name"], total)
+        filepath = build_filepath(output_dir, book_name, vol["index"], vol["name"], total,
+                                  index_fmt, include_book_name, separator)
         ok = download_volume(aid, vol["vid"], filepath, retry_count, retry_delay)
         index_str = str(vol["index"]).zfill(pad)
         if ok:

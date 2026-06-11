@@ -166,3 +166,23 @@ def test_build_filepath_no_index_no_book():
     path = build_filepath("downloads", "書名", 1, "第一卷", 10,
                           index_fmt="none", include_book_name=False)
     assert path == os.path.join("downloads", "書名", "第一卷.txt")
+
+
+def test_run_download_all_has_naming_params():
+    sig = inspect.signature(run_download_all)
+    assert sig.parameters["index_fmt"].default == "padded"
+    assert sig.parameters["include_book_name"].default is True
+    assert sig.parameters["separator"].default == " "
+
+
+def test_run_download_all_naming_params_applied(tmp_path):
+    """命名參數確實影響輸出檔名"""
+    session = MagicMock()
+    session.get.return_value = _ok_resp()
+    volumes = [{"index": 1, "name": "第一卷", "first_cid": 100, "vid": 99}]
+    q = queue.Queue()
+    with patch("src.downloader._get_session", return_value=session):
+        run_download_all("1", "書名", volumes, str(tmp_path), q,
+                         index_fmt="none", include_book_name=False, separator="_")
+    expected = os.path.join(str(tmp_path), "書名", "第一卷.txt")
+    assert os.path.exists(expected)
