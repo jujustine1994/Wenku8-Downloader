@@ -133,6 +133,8 @@ def run_download_all(aid: str, book_name: str, volumes: list[dict],
         ok = download_volume(aid, vol["vid"], filepath, retry_count, retry_delay, skip_event)
         index_str = str(vol["index"]).zfill(pad)
         if ok:
+            if skip_event and skip_event.is_set():
+                skip_event.clear()
             success += 1
             if check_garbled(filepath):
                 garbled_volumes.append(vol)

@@ -847,12 +847,35 @@ class App:
             anchor="w", padx=16, pady=(12, 4)
         )
 
+        frame_outer = ttk.Frame(win)
+        frame_outer.pack(fill="both", padx=12, pady=(0, 4))
+        canvas_h = min(len(fail_list) * 28, 280)
+        dlg_canvas = tk.Canvas(frame_outer, highlightthickness=0, height=canvas_h)
+        dlg_sb = ttk.Scrollbar(frame_outer, orient="vertical", command=dlg_canvas.yview)
+        dlg_canvas.configure(yscrollcommand=dlg_sb.set)
+        dlg_canvas.pack(side="left", fill="both", expand=True)
+        dlg_sb.pack(side="right", fill="y")
+        cb_frame = ttk.Frame(dlg_canvas)
+        cb_win = dlg_canvas.create_window((0, 0), window=cb_frame, anchor="nw")
+        cb_frame.bind(
+            "<Configure>",
+            lambda e: dlg_canvas.configure(scrollregion=dlg_canvas.bbox("all")),
+        )
+        dlg_canvas.bind(
+            "<Configure>",
+            lambda e: dlg_canvas.itemconfig(cb_win, width=e.width),
+        )
+        dlg_canvas.bind(
+            "<MouseWheel>",
+            lambda e: dlg_canvas.yview_scroll(-1 if e.delta > 0 else 1, "units"),
+        )
+
         check_vars = []
         for vol in fail_list:
             var = tk.BooleanVar(value=True)
             check_vars.append(var)
-            ttk.Checkbutton(win, text=vol["name"], variable=var).pack(
-                anchor="w", padx=20, pady=2
+            ttk.Checkbutton(cb_frame, text=vol["name"], variable=var).pack(
+                anchor="w", padx=8, pady=2
             )
 
         def _apply():
@@ -925,7 +948,7 @@ class App:
 
                 elif kind == "log":
                     _, status, index_str, vol_name, detail = msg
-                    icon = "✅" if status == "ok" else ("⚠️" if status == "warn" else ("⏭️" if status == "skip" else "❌"))
+                    icon = {"ok": "✅", "warn": "⚠️", "skip": "⏭️"}.get(status, "❌")
                     line = f"{icon} {index_str} {vol_name}"
                     if detail:
                         line += f"（{detail}）"
