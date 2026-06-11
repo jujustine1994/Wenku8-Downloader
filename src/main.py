@@ -114,6 +114,7 @@ class App:
         self._fname_book_name = bool(_cfg.get("filename_book_name", True))
         self._fname_separator = _cfg.get("filename_separator", " ")
         self._garbled_volumes: list = []
+        self._repair_mode = False
         self._browsing = False
 
         self._build_ui()
@@ -730,6 +731,7 @@ class App:
         self.btn_select_all.config(state="disabled")
         self.btn_deselect_all.config(state="disabled")
         self._garbled_volumes = []
+        self._repair_mode = False
         self.btn_repair.config(state="disabled", text="修復亂碼")
         self.log_text.config(state="normal")
         self.log_text.delete("1.0", "end")
@@ -756,6 +758,7 @@ class App:
         self._fail_volumes = []
         self.btn_retry.config(state="disabled", text="重試失敗")
         self.btn_repair.config(state="disabled", text="修復亂碼")
+        self._repair_mode = False
         self.btn_download.config(state="disabled")
         self.btn_load.config(state="disabled")
         self.btn_select_all.config(state="disabled")
@@ -787,6 +790,7 @@ class App:
         ):
             return
         self._garbled_volumes = []
+        self._repair_mode = True
         self.btn_repair.config(state="disabled", text="修復亂碼")
         self.btn_retry.config(state="disabled", text="重試失敗")
         self.btn_download.config(state="disabled")
@@ -871,7 +875,10 @@ class App:
                     _, success_count, fail_volumes, garbled_volumes = msg
                     fail_count = len(fail_volumes)
                     garbled_count = len(garbled_volumes)
-                    total = success_count + fail_count
+                    if self._repair_mode:
+                        total = success_count + fail_count + garbled_count
+                    else:
+                        total = success_count + fail_count
                     self._fail_volumes = fail_volumes
                     self._garbled_volumes = garbled_volumes
                     self.btn_load.config(state="normal")
@@ -903,7 +910,8 @@ class App:
                     else:
                         level = "success"
                         suffix = ""
-                    self._set_status(f"下載完成 {success_count}/{total}{suffix}", level)
+                    prefix = "修復完成" if self._repair_mode else "下載完成"
+                    self._set_status(f"{prefix} {success_count}/{total}{suffix}", level)
 
                 elif kind == "conv_log":
                     _, ok, filename, detail = msg
