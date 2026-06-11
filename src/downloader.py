@@ -38,6 +38,11 @@ def download_volume(aid: str, vid: int, filepath: str,
     return False
 
 
+def check_garbled(filepath: str) -> bool:
+    with open(filepath, encoding="utf-8") as f:
+        return "�" in f.read()
+
+
 def build_filepath(output_dir: str, book_name: str, volume_index: int,
                    volume_name: str, total: int,
                    index_fmt: str = "padded",

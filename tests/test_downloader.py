@@ -3,7 +3,7 @@ import queue
 import inspect
 from unittest.mock import patch, MagicMock
 import pytest
-from src.downloader import download_volume, build_filepath, run_download_all
+from src.downloader import download_volume, build_filepath, run_download_all, check_garbled
 from src.config import RETRY_COUNT, RETRY_DELAY
 
 CONTENT = b"A" * 500
@@ -196,3 +196,15 @@ def test_build_filepath_unsafe_separator_stripped():
 
     path2 = build_filepath("downloads", "書名", 1, "第一卷", 10, separator=":")
     assert path2 == os.path.join("downloads", "書名", "01 書名 第一卷.txt")
+
+
+def test_check_garbled_clean(tmp_path):
+    fp = tmp_path / "clean.txt"
+    fp.write_text("這是正常的繁體中文內容。", encoding="utf-8")
+    assert check_garbled(str(fp)) is False
+
+
+def test_check_garbled_with_replacement_char(tmp_path):
+    fp = tmp_path / "garbled.txt"
+    fp.write_text("正常內容�亂碼", encoding="utf-8")
+    assert check_garbled(str(fp)) is True
