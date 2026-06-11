@@ -110,6 +110,9 @@ class App:
         self._path_var = tk.StringVar()
         self._retry_count = int(_cfg.get("retry_count", RETRY_COUNT))
         self._retry_delay = int(_cfg.get("retry_delay", RETRY_DELAY))
+        self._fname_index = _cfg.get("filename_index", "padded")
+        self._fname_book_name = bool(_cfg.get("filename_book_name", True))
+        self._fname_separator = _cfg.get("filename_separator", " ")
         self._browsing = False
 
         self._build_ui()
@@ -669,7 +672,8 @@ class App:
         threading.Thread(
             target=run_download_all,
             args=(self._aid, self._book_name, selected, output_dir, self.msg_queue,
-                  self._retry_count, self._retry_delay),
+                  self._retry_count, self._retry_delay,
+                  self._fname_index, self._fname_book_name, self._fname_separator),
             daemon=True,
         ).start()
 
@@ -694,7 +698,8 @@ class App:
         threading.Thread(
             target=run_download_all,
             args=(self._aid, self._book_name, vols, output_dir, self.msg_queue,
-                  self._retry_count, self._retry_delay),
+                  self._retry_count, self._retry_delay,
+                  self._fname_index, self._fname_book_name, self._fname_separator),
             daemon=True,
         ).start()
 
