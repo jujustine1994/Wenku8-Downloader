@@ -837,6 +837,7 @@ class App:
     def _manage_fail_dialog(self):
         if not self._fail_volumes:
             return
+        fail_list = list(self._fail_volumes)
         win = tk.Toplevel(self.root)
         win.title("管理失敗卷")
         win.resizable(False, False)
@@ -847,7 +848,7 @@ class App:
         )
 
         check_vars = []
-        for vol in self._fail_volumes:
+        for vol in fail_list:
             var = tk.BooleanVar(value=True)
             check_vars.append(var)
             ttk.Checkbutton(win, text=vol["name"], variable=var).pack(
@@ -855,7 +856,7 @@ class App:
             )
 
         def _apply():
-            kept = [v for v, var in zip(self._fail_volumes, check_vars) if var.get()]
+            kept = [v for v, var in zip(fail_list, check_vars) if var.get()]
             self._fail_volumes = kept
             n = len(kept)
             if n:
