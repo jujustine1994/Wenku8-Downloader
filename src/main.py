@@ -550,14 +550,79 @@ class App:
         ).pack(side="left", padx=(8, 4))
         ttk.Label(row2, text="秒", font=F).pack(side="left")
 
+        tab_naming = ttk.Frame(notebook, padding=12)
+        notebook.add(tab_naming, text="  命名  ")
+
+        # 序號格式
+        ttk.Label(tab_naming, text="序號格式", font=FB).pack(anchor="w", pady=(0, 6))
+        fname_index_var = tk.StringVar(value=self._fname_index)
+        for val, label in [("padded", "零補位（01, 02…）"),
+                            ("plain",  "純數字（1, 2…）"),
+                            ("none",   "不顯示")]:
+            ttk.Radiobutton(
+                tab_naming, text=label,
+                variable=fname_index_var, value=val
+            ).pack(anchor="w", pady=2)
+
+        ttk.Separator(tab_naming, orient="horizontal").pack(fill="x", pady=10)
+
+        # 書名開關
+        fname_book_var = tk.BooleanVar(value=self._fname_book_name)
+        ttk.Checkbutton(
+            tab_naming, text="檔名含書名", variable=fname_book_var
+        ).pack(anchor="w")
+
+        ttk.Separator(tab_naming, orient="horizontal").pack(fill="x", pady=10)
+
+        # 分隔符號
+        sep_row = ttk.Frame(tab_naming)
+        sep_row.pack(anchor="w")
+        ttk.Label(sep_row, text="分隔符號：", font=F).pack(side="left")
+        fname_sep_var = tk.StringVar(value=self._fname_separator)
+        ttk.Entry(sep_row, textvariable=fname_sep_var, width=5, font=FM).pack(side="left")
+        ttk.Label(sep_row, text="（空白 = 空格）", font=FH, foreground="gray").pack(
+            side="left", padx=(6, 0)
+        )
+
+        ttk.Separator(tab_naming, orient="horizontal").pack(fill="x", pady=10)
+
+        # 即時預覽
+        preview_label = ttk.Label(tab_naming, text="", font=FM)
+        preview_label.pack(anchor="w")
+
+        def _update_naming_preview(*_):
+            idx = fname_index_var.get()
+            book = fname_book_var.get()
+            sep = fname_sep_var.get() or " "
+            parts = []
+            if idx == "padded":
+                parts.append("01")
+            elif idx == "plain":
+                parts.append("1")
+            if book:
+                parts.append("書名")
+            parts.append("第一卷")
+            preview_label.config(text="預覽：" + sep.join(parts) + ".txt")
+
+        fname_index_var.trace_add("write", _update_naming_preview)
+        fname_book_var.trace_add("write", _update_naming_preview)
+        fname_sep_var.trace_add("write", _update_naming_preview)
+        _update_naming_preview()
+
         def _apply():
             self._apply_theme(theme_var.get())
             self._retry_count = retry_count_var.get()
             self._retry_delay = retry_delay_var.get()
+            self._fname_index = fname_index_var.get()
+            self._fname_book_name = fname_book_var.get()
+            self._fname_separator = fname_sep_var.get() or " "
             self._save_config({
                 "theme": theme_var.get(),
                 "retry_count": self._retry_count,
                 "retry_delay": self._retry_delay,
+                "filename_index": self._fname_index,
+                "filename_book_name": self._fname_book_name,
+                "filename_separator": self._fname_separator,
             })
             win.destroy()
 
