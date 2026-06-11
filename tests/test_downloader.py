@@ -186,3 +186,13 @@ def test_run_download_all_naming_params_applied(tmp_path):
                          index_fmt="none", include_book_name=False, separator="_")
     expected = os.path.join(str(tmp_path), "書名", "第一卷.txt")
     assert os.path.exists(expected)
+
+
+def test_build_filepath_unsafe_separator_stripped():
+    """Windows-illegal chars in separator are stripped (not silently misrouted)"""
+    path = build_filepath("downloads", "書名", 1, "第一卷", 10, separator="/")
+    # "/" stripped → separator becomes "" → falls back to " "
+    assert path == os.path.join("downloads", "書名", "01 書名 第一卷.txt")
+
+    path2 = build_filepath("downloads", "書名", 1, "第一卷", 10, separator=":")
+    assert path2 == os.path.join("downloads", "書名", "01 書名 第一卷.txt")

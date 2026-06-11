@@ -53,7 +53,8 @@ def build_filepath(output_dir: str, book_name: str, volume_index: int,
     if include_book_name:
         parts.append(safe(book_name))
     parts.append(safe(volume_name))
-    filename = separator.join(parts) + ".txt"
+    safe_sep = safe(separator) or " "
+    filename = safe_sep.join(parts) + ".txt"
     return os.path.join(output_dir, safe(book_name), filename)
 
 
