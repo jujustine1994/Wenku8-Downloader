@@ -3,7 +3,7 @@ import queue
 import inspect
 from unittest.mock import patch, MagicMock
 import pytest
-from src.downloader import download_volume, build_filepath, run_download_all, check_garbled
+from src.downloader import download_volume, build_filepath, run_download_all, check_garbled, repair_volume
 from src.config import RETRY_COUNT, RETRY_DELAY
 
 CONTENT = b"A" * 500
@@ -208,3 +208,57 @@ def test_check_garbled_with_replacement_char(tmp_path):
     fp = tmp_path / "garbled.txt"
     fp.write_text("正常內容�亂碼", encoding="utf-8")
     assert check_garbled(str(fp)) is True
+
+
+def test_repair_volume_uses_gbk_when_utf8_garbled(tmp_path):
+    """UTF-8 下載有亂碼時，改用 GBK 下載且結果更乾淨"""
+    invalid_utf8 = b"\x80" * 100           # 100 bytes, invalid UTF-8 → all �
+    clean_gbk = ("软件" * 30).encode("gbk") # 120 bytes, valid GBK
+
+    def mock_get(url, **kwargs):
+        resp = MagicMock()
+        resp.raise_for_status = MagicMock()
+        resp.content = invalid_utf8 if "charset=utf-8" in url else clean_gbk
+        return resp
+
+    session = MagicMock()
+    session.get.side_effect = mock_get
+    fp = str(tmp_path / "書名" / "vol.txt")
+    os.makedirs(os.path.dirname(fp), exist_ok=True)
+
+    with patch("src.downloader._get_session", return_value=session):
+        result = repair_volume("1", 99, fp)
+
+    assert result is False
+    with open(fp, encoding="utf-8") as f:
+        assert "�" not in f.read()
+
+
+def test_repair_volume_returns_true_when_both_encodings_garbled(tmp_path):
+    """兩種編碼都有亂碼時回傳 True"""
+    invalid_utf8 = b"\x80" * 100
+
+    session = MagicMock()
+    session.get.return_value = _ok_resp(content=invalid_utf8)
+    fp = str(tmp_path / "書名" / "vol.txt")
+    os.makedirs(os.path.dirname(fp), exist_ok=True)
+
+    with patch("src.downloader._get_session", return_value=session), \
+         patch("src.downloader.time.sleep"):
+        result = repair_volume("1", 99, fp)
+
+    assert result is True
+
+
+def test_repair_volume_returns_none_on_network_failure(tmp_path):
+    """網路失敗（all retries exhausted）回傳 None"""
+    session = MagicMock()
+    session.get.side_effect = Exception("network error")
+    fp = str(tmp_path / "書名" / "vol.txt")
+    os.makedirs(os.path.dirname(fp), exist_ok=True)
+
+    with patch("src.downloader._get_session", return_value=session), \
+         patch("src.downloader.time.sleep"):
+        result = repair_volume("1", 99, fp, retry_count=1)
+
+    assert result is None

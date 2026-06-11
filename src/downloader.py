@@ -43,6 +43,50 @@ def check_garbled(filepath: str) -> bool:
         return "�" in f.read()
 
 
+def repair_volume(aid: str, vid: int, filepath: str,
+                  retry_count: int = RETRY_COUNT,
+                  retry_delay: float = RETRY_DELAY) -> bool | None:
+    """
+    Returns False = 修復成功（無亂碼）
+            True  = 修復後仍有亂碼
+            None  = 網路失敗
+    """
+    def _try_download(charset: str) -> bytes | None:
+        url = f"{DOWNLOAD_BASE_URL}?aid={aid}&vid={vid}&charset={charset}"
+        for attempt in range(1, retry_count + 1):
+            try:
+                resp = _get_session().get(url, impersonate="chrome120", timeout=30)
+                resp.raise_for_status()
+                if len(resp.content) < 50 or resp.content[:5].strip().startswith(b"<"):
+                    raise ValueError("Response is HTML error page")
+                return resp.content
+            except Exception:
+                if attempt < retry_count:
+                    time.sleep(retry_delay)
+        return None
+
+    utf8_bytes = _try_download("utf-8")
+    if utf8_bytes is None:
+        return None
+
+    utf8_text = utf8_bytes.decode("utf-8", errors="replace")
+    best_text = utf8_text
+
+    if "�" in utf8_text:
+        gbk_bytes = _try_download("gbk")
+        if gbk_bytes is not None:
+            gbk_text = gbk_bytes.decode("gbk", errors="replace")
+            if gbk_text.count("�") < utf8_text.count("�"):
+                best_text = gbk_text
+
+    converted = convert_to_traditional(best_text)
+    os.makedirs(os.path.dirname(filepath), exist_ok=True)
+    with open(filepath, "w", encoding="utf-8") as f:
+        f.write(converted)
+
+    return True if "�" in converted else False
+
+
 def build_filepath(output_dir: str, book_name: str, volume_index: int,
                    volume_name: str, total: int,
                    index_fmt: str = "padded",
