@@ -17,9 +17,12 @@ def _get_session() -> cf_requests.Session:
 
 def download_volume(aid: str, vid: int, filepath: str,
                     retry_count: int = RETRY_COUNT,
-                    retry_delay: float = RETRY_DELAY) -> bool:
+                    retry_delay: float = RETRY_DELAY,
+                    skip_event=None) -> bool:
     url = f"{DOWNLOAD_BASE_URL}?aid={aid}&vid={vid}&charset=utf-8"
     for attempt in range(1, retry_count + 1):
+        if skip_event and skip_event.is_set():
+            return False
         try:
             resp = _get_session().get(url, impersonate="chrome120", timeout=30)
             resp.raise_for_status()
@@ -34,6 +37,8 @@ def download_volume(aid: str, vid: int, filepath: str,
             return True
         except Exception:
             if attempt < retry_count:
+                if skip_event and skip_event.is_set():
+                    return False
                 time.sleep(retry_delay)
     return False
 

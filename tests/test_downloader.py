@@ -360,3 +360,46 @@ def test_run_repair_all_fail_on_network_error(tmp_path):
     done = msgs[-1]
     assert done[2] == [vol]
     assert done[3] == []
+
+
+def test_download_volume_skip_before_retry(tmp_path):
+    """skip_event 已設時，download_volume 在第一次嘗試前立即回傳 False"""
+    import threading
+    skip_event = threading.Event()
+    skip_event.set()
+
+    session = MagicMock()
+    session.get.return_value = _ok_resp()
+    fp = str(tmp_path / "書名" / "vol.txt")
+    os.makedirs(os.path.dirname(fp), exist_ok=True)
+
+    with patch("src.downloader._get_session", return_value=session):
+        result = download_volume("1", 99, fp, skip_event=skip_event)
+
+    assert result is False
+    session.get.assert_not_called()   # 沒有實際發出請求
+
+
+def test_download_volume_skip_between_retries(tmp_path):
+    """download_volume 第一次失敗後，sleep 前 skip_event 被設 → 不繼續 retry"""
+    import threading
+    skip_event = threading.Event()
+    call_count = 0
+
+    def side_effect(*args, **kwargs):
+        nonlocal call_count
+        call_count += 1
+        skip_event.set()   # 第一次失敗後設定 skip
+        raise Exception("network error")
+
+    session = MagicMock()
+    session.get.side_effect = side_effect
+    fp = str(tmp_path / "書名" / "vol.txt")
+    os.makedirs(os.path.dirname(fp), exist_ok=True)
+
+    with patch("src.downloader._get_session", return_value=session), \
+         patch("src.downloader.time.sleep"):
+        result = download_volume("1", 99, fp, retry_count=3, skip_event=skip_event)
+
+    assert result is False
+    assert call_count == 1   # 只嘗試了一次，沒有 retry
