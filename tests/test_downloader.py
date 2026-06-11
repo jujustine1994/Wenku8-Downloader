@@ -140,3 +140,29 @@ def test_download_converts_to_traditional(tmp_path):
         text = f.read()
     assert "軟體" in text
     assert "软件" not in text
+
+
+def test_build_filepath_plain_index():
+    path = build_filepath("downloads", "書名", 1, "第一卷", 10, index_fmt="plain")
+    assert path == os.path.join("downloads", "書名", "1 書名 第一卷.txt")
+
+
+def test_build_filepath_no_index():
+    path = build_filepath("downloads", "書名", 1, "第一卷", 10, index_fmt="none")
+    assert path == os.path.join("downloads", "書名", "書名 第一卷.txt")
+
+
+def test_build_filepath_no_book_name():
+    path = build_filepath("downloads", "書名", 1, "第一卷", 10, include_book_name=False)
+    assert path == os.path.join("downloads", "書名", "01 第一卷.txt")
+
+
+def test_build_filepath_custom_separator():
+    path = build_filepath("downloads", "書名", 1, "第一卷", 10, separator="_")
+    assert path == os.path.join("downloads", "書名", "01_書名_第一卷.txt")
+
+
+def test_build_filepath_no_index_no_book():
+    path = build_filepath("downloads", "書名", 1, "第一卷", 10,
+                          index_fmt="none", include_book_name=False)
+    assert path == os.path.join("downloads", "書名", "第一卷.txt")

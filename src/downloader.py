@@ -39,11 +39,21 @@ def download_volume(aid: str, vid: int, filepath: str,
 
 
 def build_filepath(output_dir: str, book_name: str, volume_index: int,
-                   volume_name: str, total: int) -> str:
+                   volume_name: str, total: int,
+                   index_fmt: str = "padded",
+                   include_book_name: bool = True,
+                   separator: str = " ") -> str:
     pad = max(len(str(total)), 2)
-    index_str = str(volume_index).zfill(pad)
     safe = lambda s: "".join(c for c in s if c not in r'\/:*?"<>|')
-    filename = f"{index_str} {safe(book_name)} {safe(volume_name)}.txt"
+    parts = []
+    if index_fmt == "padded":
+        parts.append(str(volume_index).zfill(pad))
+    elif index_fmt == "plain":
+        parts.append(str(volume_index))
+    if include_book_name:
+        parts.append(safe(book_name))
+    parts.append(safe(volume_name))
+    filename = separator.join(parts) + ".txt"
     return os.path.join(output_dir, safe(book_name), filename)
 
 
