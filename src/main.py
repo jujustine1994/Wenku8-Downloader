@@ -232,6 +232,10 @@ class App:
             btn_row, text="重試失敗", command=self._on_retry, width=10, state="disabled"
         )
         self.btn_retry.pack(side="right", ipady=4, padx=(0, 6))
+        self.btn_manage = ttk.Button(
+            btn_row, text="管理", command=self._manage_fail_dialog, width=5, state="disabled"
+        )
+        self.btn_manage.pack(side="right", ipady=4, padx=(0, 2))
         self.btn_repair = ttk.Button(
             btn_row, text="修復亂碼", command=self._on_repair, width=10, state="disabled"
         )
@@ -739,6 +743,7 @@ class App:
         self._repair_mode = False
         self._skip_event.clear()
         self.btn_repair.config(state="disabled", text="修復亂碼")
+        self.btn_manage.config(state="disabled")
         self.btn_skip.config(state="normal")
         self.log_text.config(state="normal")
         self.log_text.delete("1.0", "end")
@@ -765,6 +770,7 @@ class App:
         vols = list(self._fail_volumes)
         self._fail_volumes = []
         self.btn_retry.config(state="disabled", text="重試失敗")
+        self.btn_manage.config(state="disabled")
         self.btn_repair.config(state="disabled", text="修復亂碼")
         self._repair_mode = False
         self._skip_event.clear()
@@ -804,6 +810,7 @@ class App:
         self._repair_mode = True
         self.btn_repair.config(state="disabled", text="修復亂碼")
         self.btn_retry.config(state="disabled", text="重試失敗")
+        self.btn_manage.config(state="disabled")
         self.btn_download.config(state="disabled")
         self.btn_load.config(state="disabled")
         self.btn_select_all.config(state="disabled")
@@ -826,6 +833,47 @@ class App:
 
     def _on_skip(self):
         self._skip_event.set()
+
+    def _manage_fail_dialog(self):
+        if not self._fail_volumes:
+            return
+        win = tk.Toplevel(self.root)
+        win.title("管理失敗卷")
+        win.resizable(False, False)
+        win.grab_set()
+
+        ttk.Label(win, text="取消勾選 = 移出重試列表", font=FH, foreground="gray").pack(
+            anchor="w", padx=16, pady=(12, 4)
+        )
+
+        check_vars = []
+        for vol in self._fail_volumes:
+            var = tk.BooleanVar(value=True)
+            check_vars.append(var)
+            ttk.Checkbutton(win, text=vol["name"], variable=var).pack(
+                anchor="w", padx=20, pady=2
+            )
+
+        def _apply():
+            kept = [v for v, var in zip(self._fail_volumes, check_vars) if var.get()]
+            self._fail_volumes = kept
+            n = len(kept)
+            if n:
+                self.btn_retry.config(state="normal", text=f"重試 {n} 卷失敗")
+                self.btn_manage.config(state="normal")
+            else:
+                self.btn_retry.config(state="disabled", text="重試失敗")
+                self.btn_manage.config(state="disabled")
+            win.destroy()
+
+        btn_row = ttk.Frame(win)
+        btn_row.pack(pady=(12, 16))
+        ttk.Button(btn_row, text="確認", command=_apply, width=10).pack(
+            side="left", padx=4, ipady=4
+        )
+        ttk.Button(btn_row, text="取消", command=win.destroy, width=10).pack(
+            side="left", padx=4, ipady=4
+        )
 
     # ---- Queue 輪詢 ----
 
@@ -904,8 +952,10 @@ class App:
                         self.btn_retry.config(
                             state="normal", text=f"重試 {fail_count} 卷失敗"
                         )
+                        self.btn_manage.config(state="normal")
                     else:
                         self.btn_retry.config(state="disabled", text="重試失敗")
+                        self.btn_manage.config(state="disabled")
                     if garbled_count:
                         self.btn_repair.config(
                             state="normal", text=f"修復亂碼 {garbled_count} 卷"
