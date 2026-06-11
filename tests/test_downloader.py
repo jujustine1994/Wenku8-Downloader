@@ -236,10 +236,19 @@ def test_repair_volume_uses_gbk_when_utf8_garbled(tmp_path):
 
 def test_repair_volume_returns_true_when_both_encodings_garbled(tmp_path):
     """兩種編碼都有亂碼時回傳 True"""
-    invalid_utf8 = b"\x80" * 100
+    # \x80*100: invalid UTF-8 → all U+FFFD
+    invalid_for_utf8 = b"\x80" * 100
+    # \xff\xfe*60: invalid in both UTF-8 and GBK → all U+FFFD when decoded with errors='replace'
+    invalid_for_gbk = b"\xff\xfe" * 60
+
+    def mock_get(url, **kwargs):
+        resp = MagicMock()
+        resp.raise_for_status = MagicMock()
+        resp.content = invalid_for_utf8 if "charset=utf-8" in url else invalid_for_gbk
+        return resp
 
     session = MagicMock()
-    session.get.return_value = _ok_resp(content=invalid_utf8)
+    session.get.side_effect = mock_get
     fp = str(tmp_path / "書名" / "vol.txt")
     os.makedirs(os.path.dirname(fp), exist_ok=True)
 
