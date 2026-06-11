@@ -403,3 +403,69 @@ def test_download_volume_skip_between_retries(tmp_path):
 
     assert result is False
     assert call_count == 1   # 只嘗試了一次，沒有 retry
+
+
+def test_run_download_all_skip_goes_to_fail(tmp_path):
+    """skip_event 觸發後，該卷進入 fail_volumes，log status 為 skip"""
+    import threading
+    skip_event = threading.Event()
+
+    call_count = 0
+    def side_effect(*args, **kwargs):
+        nonlocal call_count
+        call_count += 1
+        skip_event.set()
+        raise Exception("network error")
+
+    session = MagicMock()
+    session.get.side_effect = side_effect
+    volumes = [{"index": 1, "name": "第一卷", "first_cid": 100, "vid": 99}]
+    q = queue.Queue()
+    with patch("src.downloader._get_session", return_value=session), \
+         patch("src.downloader.time.sleep"):
+        run_download_all("1", "書名", volumes, str(tmp_path), q,
+                         retry_count=3, skip_event=skip_event)
+    msgs = []
+    while not q.empty():
+        msgs.append(q.get())
+    log_msg = next(m for m in msgs if m[0] == "log")
+    assert log_msg[1] == "skip"
+    assert log_msg[4] == "已跳過"
+    done = msgs[-1]
+    assert done[2] == [{"index": 1, "name": "第一卷", "first_cid": 100, "vid": 99}]
+
+
+def test_run_download_all_skip_clears_event_for_next_volume(tmp_path):
+    """跳過第一卷後，skip_event 被清除，第二卷正常下載"""
+    import threading
+    skip_event = threading.Event()
+
+    call_count = 0
+    def side_effect(*args, **kwargs):
+        nonlocal call_count
+        call_count += 1
+        if call_count == 1:
+            skip_event.set()
+            raise Exception("network error")
+        return _ok_resp()
+
+    session = MagicMock()
+    session.get.side_effect = side_effect
+    volumes = [
+        {"index": 1, "name": "第一卷", "first_cid": 100, "vid": 99},
+        {"index": 2, "name": "第二卷", "first_cid": 200, "vid": 100},
+    ]
+    q = queue.Queue()
+    with patch("src.downloader._get_session", return_value=session), \
+         patch("src.downloader.time.sleep"):
+        run_download_all("1", "書名", volumes, str(tmp_path), q,
+                         retry_count=3, skip_event=skip_event)
+    msgs = []
+    while not q.empty():
+        msgs.append(q.get())
+    log_msgs = [m for m in msgs if m[0] == "log"]
+    assert log_msgs[0][1] == "skip"   # 第一卷被跳過
+    assert log_msgs[1][1] in ("ok", "warn")   # 第二卷下載成功
+    done = msgs[-1]
+    assert done[1] == 1   # 第二卷成功
+    assert len(done[2]) == 1   # 第一卷在 fail_volumes

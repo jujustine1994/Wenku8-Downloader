@@ -118,7 +118,8 @@ def run_download_all(aid: str, book_name: str, volumes: list[dict],
                      retry_delay: float = RETRY_DELAY,
                      index_fmt: str = "padded",
                      include_book_name: bool = True,
-                     separator: str = " ") -> None:
+                     separator: str = " ",
+                     skip_event=None) -> None:
     total = len(volumes)
     success = 0
     fail_volumes: list[dict] = []
@@ -129,7 +130,7 @@ def run_download_all(aid: str, book_name: str, volumes: list[dict],
         msg_queue.put(("progress", i, total, vol["name"]))
         filepath = build_filepath(output_dir, book_name, vol["index"], vol["name"], total,
                                   index_fmt, include_book_name, separator)
-        ok = download_volume(aid, vol["vid"], filepath, retry_count, retry_delay)
+        ok = download_volume(aid, vol["vid"], filepath, retry_count, retry_delay, skip_event)
         index_str = str(vol["index"]).zfill(pad)
         if ok:
             success += 1
@@ -139,8 +140,13 @@ def run_download_all(aid: str, book_name: str, volumes: list[dict],
             else:
                 msg_queue.put(("log", "ok", index_str, vol["name"], ""))
         else:
+            skipped = skip_event is not None and skip_event.is_set()
             fail_volumes.append(vol)
-            msg_queue.put(("log", "fail", index_str, vol["name"], f"retry {retry_count}x 失敗"))
+            if skipped:
+                skip_event.clear()
+                msg_queue.put(("log", "skip", index_str, vol["name"], "已跳過"))
+            else:
+                msg_queue.put(("log", "fail", index_str, vol["name"], f"retry {retry_count}x 失敗"))
 
     msg_queue.put(("done", success, fail_volumes, garbled_volumes))
 
