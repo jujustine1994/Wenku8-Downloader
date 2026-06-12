@@ -35,6 +35,12 @@ FH = ("Microsoft JhengHei", 10)
 
 URL_PLACEHOLDER = "https://www.wenku8.net/modules/article/reader.php?aid=XXXX"
 
+DEFAULT_SIDE_KEYWORDS = [
+    "外傳", "番外", "特典", "SS", "EX", "Extra", "Side Story",
+    "幕間", "插話", "間章", "附錄", "後記", "後日談", "後日譚",
+    "特別篇", "短篇", "短篇集", "Epilogue",
+]
+
 THEMES = {
     "light": {
         "name": "清爽白",
@@ -113,6 +119,7 @@ class App:
         self._fname_index = _cfg.get("filename_index", "padded")
         self._fname_book_name = bool(_cfg.get("filename_book_name", True))
         self._fname_separator = _cfg.get("filename_separator", " ")
+        self._side_keywords: list[str] = _cfg.get("side_keywords", list(DEFAULT_SIDE_KEYWORDS))
         self._garbled_volumes: list = []
         self._repair_mode = False
         self._skip_event = threading.Event()
@@ -624,6 +631,83 @@ class App:
         fname_sep_var.trace_add("write", _update_naming_preview)
         _update_naming_preview()
 
+        tab_identify = ttk.Frame(notebook, padding=12)
+        notebook.add(tab_identify, text="  識別  ")
+        tab_identify.columnconfigure(0, weight=1)
+        tab_identify.rowconfigure(1, weight=1)
+
+        ttk.Label(tab_identify, text="外傳關鍵字", font=FB).grid(
+            row=0, column=0, sticky="w", pady=(0, 6)
+        )
+
+        id_list_frame = ttk.Frame(tab_identify)
+        id_list_frame.grid(row=1, column=0, sticky="nsew")
+        id_list_frame.columnconfigure(0, weight=1)
+        id_list_frame.rowconfigure(0, weight=1)
+
+        id_canvas = tk.Canvas(id_list_frame, highlightthickness=0, height=200)
+        id_sb = ttk.Scrollbar(id_list_frame, orient="vertical", command=id_canvas.yview)
+        id_canvas.configure(yscrollcommand=id_sb.set)
+        id_canvas.grid(row=0, column=0, sticky="nsew")
+        id_sb.grid(row=0, column=1, sticky="ns")
+
+        id_kw_frame = ttk.Frame(id_canvas)
+        id_kw_win = id_canvas.create_window((0, 0), window=id_kw_frame, anchor="nw")
+        id_kw_frame.bind(
+            "<Configure>",
+            lambda e: id_canvas.configure(scrollregion=id_canvas.bbox("all")),
+        )
+        id_canvas.bind(
+            "<Configure>",
+            lambda e: id_canvas.itemconfig(id_kw_win, width=e.width),
+        )
+        id_canvas.bind(
+            "<MouseWheel>",
+            lambda e: id_canvas.yview_scroll(int(-1 * (e.delta / 120)), "units"),
+        )
+
+        kw_list = list(self._side_keywords)
+
+        def _refresh_kw_list():
+            for w in id_kw_frame.winfo_children():
+                w.destroy()
+            for kw in kw_list:
+                row = ttk.Frame(id_kw_frame)
+                row.pack(fill="x", padx=4, pady=1)
+                row.columnconfigure(0, weight=1)
+                ttk.Label(row, text=kw, font=F, anchor="w").grid(
+                    row=0, column=0, sticky="ew"
+                )
+                ttk.Button(
+                    row, text="刪除", width=5,
+                    command=lambda k=kw: _delete_kw(k),
+                ).grid(row=0, column=1, padx=(4, 0))
+
+        def _delete_kw(kw):
+            if kw in kw_list:
+                kw_list.remove(kw)
+                _refresh_kw_list()
+
+        add_row = ttk.Frame(tab_identify)
+        add_row.grid(row=2, column=0, sticky="ew", pady=(8, 0))
+        add_row.columnconfigure(0, weight=1)
+        new_kw_var = tk.StringVar()
+        new_kw_entry = ttk.Entry(add_row, textvariable=new_kw_var, font=F)
+        new_kw_entry.grid(row=0, column=0, sticky="ew", padx=(0, 8))
+
+        def _add_kw(*_):
+            kw = new_kw_var.get().strip()
+            if kw and kw not in kw_list:
+                kw_list.append(kw)
+                new_kw_var.set("")
+                _refresh_kw_list()
+                id_canvas.yview_moveto(1.0)
+
+        new_kw_entry.bind("<Return>", _add_kw)
+        ttk.Button(add_row, text="新增", width=6, command=_add_kw).grid(row=0, column=1)
+
+        _refresh_kw_list()
+
         def _apply():
             self._apply_theme(theme_var.get())
             self._retry_count = retry_count_var.get()
@@ -631,6 +715,7 @@ class App:
             self._fname_index = fname_index_var.get()
             self._fname_book_name = fname_book_var.get()
             self._fname_separator = fname_sep_var.get() or " "
+            self._side_keywords = list(kw_list)
             self._save_config({
                 "theme": theme_var.get(),
                 "retry_count": self._retry_count,
@@ -638,6 +723,7 @@ class App:
                 "filename_index": self._fname_index,
                 "filename_book_name": self._fname_book_name,
                 "filename_separator": self._fname_separator,
+                "side_keywords": self._side_keywords,
             })
             win.destroy()
 

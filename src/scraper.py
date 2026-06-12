@@ -4,6 +4,14 @@ from bs4 import BeautifulSoup
 from curl_cffi import requests as cf_requests
 from src.config import CATALOG_BASE_URL
 
+_MAIN_VOL_RE = re.compile(
+    r'第[一二三四五六七八九十百千萬\d]+[卷册冊部篇章]'
+    r'|Vol\.?\s*\d+'
+    r'|卷[一二三四五六七八九十百千萬\d]+'
+    r'|\d+[卷册冊部篇章]',
+    re.IGNORECASE,
+)
+
 # Module-level session：重用 TLS 連線，避免每次重建握手
 _session: cf_requests.Session | None = None
 
@@ -13,6 +21,17 @@ def _get_session() -> cf_requests.Session:
     if _session is None:
         _session = cf_requests.Session()
     return _session
+
+
+def classify_volume(name: str, side_keywords: list[str]) -> str:
+    """Returns 'main' or 'side'. Main-pattern whitelist takes priority."""
+    if _MAIN_VOL_RE.search(name):
+        return "main"
+    name_lower = name.lower()
+    for kw in side_keywords:
+        if kw.lower() in name_lower:
+            return "side"
+    return "main"
 
 
 def parse_aid_from_url(url: str) -> str:
