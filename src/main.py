@@ -4,7 +4,7 @@ import os
 import queue
 import threading
 import tkinter as tk
-from tkinter import ttk, scrolledtext, messagebox
+from tkinter import ttk, scrolledtext
 
 from src.config import OUTPUT_DIR, RETRY_COUNT, RETRY_DELAY
 from src.scraper import (
@@ -110,7 +110,7 @@ class App:
 
         self.msg_queue: queue.Queue = queue.Queue()
         self._volumes = []
-        self._fail_volumes: list = []
+        self._recovery_volumes: list = []
         self._conv_files: list[str] = []
         self._aid = None
         self._book_name = None
@@ -123,7 +123,6 @@ class App:
         self._fname_book_name = bool(_cfg.get("filename_book_name", True))
         self._fname_separator = _cfg.get("filename_separator", " ")
         self._side_keywords: list[str] = _cfg.get("side_keywords", list(DEFAULT_SIDE_KEYWORDS))
-        self._garbled_volumes: list = []
         self._last_batch_vids: set = set()
         self._repair_mode = False
         self._skip_event = threading.Event()
@@ -239,18 +238,14 @@ class App:
             btn_row, text="下載選取", command=self._on_download, width=10, state="disabled"
         )
         self.btn_download.pack(side="right", ipady=4)
-        self.btn_retry = ttk.Button(
-            btn_row, text="重試失敗", command=self._on_retry, width=10, state="disabled"
+        self.btn_recover = ttk.Button(
+            btn_row, text="重試/修復", command=self._on_recover, width=10, state="disabled"
         )
-        self.btn_retry.pack(side="right", ipady=4, padx=(0, 6))
+        self.btn_recover.pack(side="right", ipady=4, padx=(0, 6))
         self.btn_manage = ttk.Button(
-            btn_row, text="管理", command=self._manage_fail_dialog, width=5, state="disabled"
+            btn_row, text="管理", command=self._manage_recovery_dialog, width=5, state="disabled"
         )
         self.btn_manage.pack(side="right", ipady=4, padx=(0, 2))
-        self.btn_repair = ttk.Button(
-            btn_row, text="修復亂碼", command=self._on_repair, width=10, state="disabled"
-        )
-        self.btn_repair.pack(side="right", ipady=4, padx=(0, 6))
         self.btn_skip = ttk.Button(
             btn_row, text="跳過目前卷", command=self._on_skip, width=10, state="disabled"
         )
@@ -938,17 +933,15 @@ class App:
         self._check_canvas.yview_moveto(0)
 
     def _reset_book_state(self):
-        """清空跟目前這本書相關的狀態：卷列表、失敗/亂碼清單與對應按鈕。
+        """清空跟目前這本書相關的狀態：卷列表、待處理清單與對應按鈕。
         載入新書、或 Preview 視窗取消時共用，避免舊書的清單/按鈕狀態殘留到下一本書。"""
-        self._fail_volumes = []
-        self._garbled_volumes = []
+        self._recovery_volumes = []
         self._build_checkbox_list([])
         self.btn_download.config(state="disabled")
         self.btn_select_all.config(state="disabled")
         self.btn_deselect_all.config(state="disabled")
-        self.btn_retry.config(state="disabled", text="重試失敗")
+        self.btn_recover.config(state="disabled", text="重試/修復")
         self.btn_manage.config(state="disabled")
-        self.btn_repair.config(state="disabled", text="修復亂碼")
 
     def _open_preview_dialog(self, book_name: str, volumes: list[dict]):
         win = tk.Toplevel(self.root)
@@ -1149,7 +1142,7 @@ class App:
         self._repair_mode = False
         self._last_batch_vids = {v["vid"] for v in selected}
         self._skip_event.clear()
-        self.btn_repair.config(state="disabled", text="修復亂碼")
+        self.btn_recover.config(state="disabled", text="重試/修復")
         self.btn_manage.config(state="disabled")
         self.btn_skip.config(state="normal")
         self.log_text.config(state="normal")
@@ -1170,60 +1163,18 @@ class App:
             daemon=True,
         ).start()
 
-    def _on_retry(self):
-        if not self._fail_volumes:
+    def _on_recover(self):
+        if not self._recovery_volumes:
             return
         output_dir = self._ensure_output_dir()
         if output_dir is None:
             return
-        vols = list(self._fail_volumes)
-        self._fail_volumes = []
-        self._last_batch_vids = {v["vid"] for v in vols}
-        self.btn_retry.config(state="disabled", text="重試失敗")
-        self.btn_manage.config(state="disabled")
-        self.btn_repair.config(state="disabled", text="修復亂碼")
-        self._repair_mode = False
-        self._skip_event.clear()
-        self.btn_skip.config(state="normal")
-        self.btn_download.config(state="disabled")
-        self.btn_load.config(state="disabled")
-        self.btn_select_all.config(state="disabled")
-        self.btn_deselect_all.config(state="disabled")
-        self.log_text.config(state="normal")
-        self.log_text.insert("end", f"\n── 重試 {len(vols)} 卷 ──\n")
-        self.log_text.see("end")
-        self.log_text.config(state="disabled")
-        self.progress_bar["value"] = 0
-        self.progress_bar["maximum"] = len(vols)
-        self._set_status(f"重試中... 共 {len(vols)} 卷", "info")
-        threading.Thread(
-            target=run_download_all,
-            args=(self._aid, self._book_name, vols, output_dir, self.msg_queue,
-                  self._retry_count, self._retry_delay,
-                  self._fname_index, self._fname_book_name, self._fname_separator),
-            kwargs={"skip_event": self._skip_event},
-            daemon=True,
-        ).start()
-
-    def _on_repair(self):
-        if not self._garbled_volumes:
-            return
-        vols = list(self._garbled_volumes)
-        names = "\n".join(f"  · {v['name']}" for v in vols)
-        if not messagebox.askokcancel(
-            "亂碼修復",
-            f"以下 {len(vols)} 卷偵測到亂碼：\n{names}\n\n嘗試換編碼修復？"
-        ):
-            return
-        output_dir = self._ensure_output_dir()
-        if output_dir is None:
-            return
-        self._garbled_volumes = []
+        vols = list(self._recovery_volumes)
+        self._recovery_volumes = []
         self._last_batch_vids = {v["vid"] for v in vols}
         self._repair_mode = True
         self._skip_event.clear()
-        self.btn_repair.config(state="disabled", text="修復亂碼")
-        self.btn_retry.config(state="disabled", text="重試失敗")
+        self.btn_recover.config(state="disabled", text="重試/修復")
         self.btn_manage.config(state="disabled")
         self.btn_download.config(state="disabled")
         self.btn_load.config(state="disabled")
@@ -1231,12 +1182,12 @@ class App:
         self.btn_deselect_all.config(state="disabled")
         self.btn_skip.config(state="normal")
         self.log_text.config(state="normal")
-        self.log_text.insert("end", f"\n── 修復亂碼 {len(vols)} 卷 ──\n")
+        self.log_text.insert("end", f"\n── 重試/修復 {len(vols)} 卷 ──\n")
         self.log_text.see("end")
         self.log_text.config(state="disabled")
         self.progress_bar["value"] = 0
         self.progress_bar["maximum"] = len(vols)
-        self._set_status(f"修復中... 共 {len(vols)} 卷", "info")
+        self._set_status(f"處理中... 共 {len(vols)} 卷", "info")
         threading.Thread(
             target=run_repair_all,
             args=(self._aid, self._book_name, vols, output_dir, self.msg_queue,
@@ -1249,12 +1200,12 @@ class App:
     def _on_skip(self):
         self._skip_event.set()
 
-    def _manage_fail_dialog(self):
-        if not self._fail_volumes:
+    def _manage_recovery_dialog(self):
+        if not self._recovery_volumes:
             return
-        fail_list = list(self._fail_volumes)
+        fail_list = list(self._recovery_volumes)
         win = tk.Toplevel(self.root)
-        win.title("管理失敗卷")
+        win.title("管理待處理卷")
         win.resizable(False, False)
         win.grab_set()
 
@@ -1295,13 +1246,13 @@ class App:
 
         def _apply():
             kept = [v for v, var in zip(fail_list, check_vars) if var.get()]
-            self._fail_volumes = kept
+            self._recovery_volumes = kept
             n = len(kept)
             if n:
-                self.btn_retry.config(state="normal", text=f"重試 {n} 卷失敗")
+                self.btn_recover.config(state="normal", text=f"重試/修復 {n} 卷")
                 self.btn_manage.config(state="normal")
             else:
-                self.btn_retry.config(state="disabled", text="重試失敗")
+                self.btn_recover.config(state="disabled", text="重試/修復")
                 self.btn_manage.config(state="disabled")
             win.destroy()
 
@@ -1369,35 +1320,25 @@ class App:
                         total = success_count + batch_fail_count + batch_garbled_count
                     else:
                         total = success_count + batch_fail_count
-                    # 合併而非覆蓋：保留其他批次尚未解決的失敗/亂碼卷，只更新本批次涵蓋到的卷
+                    # 合併而非覆蓋：保留其他批次尚未解決的卷，只更新本批次涵蓋到的卷
                     attempted = self._last_batch_vids
-                    self._fail_volumes = [
-                        v for v in self._fail_volumes if v["vid"] not in attempted
-                    ] + fail_volumes
-                    self._garbled_volumes = [
-                        v for v in self._garbled_volumes if v["vid"] not in attempted
-                    ] + garbled_volumes
-                    fail_count = len(self._fail_volumes)
-                    garbled_count = len(self._garbled_volumes)
+                    self._recovery_volumes = [
+                        v for v in self._recovery_volumes if v["vid"] not in attempted
+                    ] + fail_volumes + garbled_volumes
+                    recovery_count = len(self._recovery_volumes)
                     self.btn_load.config(state="normal")
                     self.btn_download.config(state="normal")
                     self.btn_select_all.config(state="normal")
                     self.btn_deselect_all.config(state="normal")
                     self.btn_skip.config(state="disabled")
-                    if fail_count:
-                        self.btn_retry.config(
-                            state="normal", text=f"重試 {fail_count} 卷失敗"
+                    if recovery_count:
+                        self.btn_recover.config(
+                            state="normal", text=f"重試/修復 {recovery_count} 卷"
                         )
                         self.btn_manage.config(state="normal")
                     else:
-                        self.btn_retry.config(state="disabled", text="重試失敗")
+                        self.btn_recover.config(state="disabled", text="重試/修復")
                         self.btn_manage.config(state="disabled")
-                    if garbled_count:
-                        self.btn_repair.config(
-                            state="normal", text=f"修復亂碼 {garbled_count} 卷"
-                        )
-                    else:
-                        self.btn_repair.config(state="disabled", text="修復亂碼")
                     self.progress_bar["value"] = total
                     self.progress_label.config(text=f"完成 {success_count}/{total} 卷")
                     if fail_volumes or garbled_volumes:
