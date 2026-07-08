@@ -7,7 +7,10 @@ import tkinter as tk
 from tkinter import ttk, scrolledtext, messagebox
 
 from src.config import OUTPUT_DIR, RETRY_COUNT, RETRY_DELAY
-from src.scraper import parse_aid_from_url, fetch_catalog, parse_book_title, parse_volumes
+from src.scraper import (
+    parse_aid_from_url, fetch_catalog, parse_book_title, parse_volumes,
+    assign_categories_and_sequence, resequence_by_category, format_index_token,
+)
 from src.downloader import run_download_all, run_repair_all
 
 # 高 DPI 感知（4K/2K 螢幕不模糊，需在 Tk() 前呼叫）
@@ -919,13 +922,16 @@ class App:
         for w in self._cb_frame.winfo_children():
             w.destroy()
         self._check_vars = []
-        pad = max(len(str(len(volumes))), 2)
         for v in volumes:
             var = tk.BooleanVar(value=True)
             self._check_vars.append(var)
+            seq_index = v.get("seq_index", v["index"])
+            seq_total = v.get("seq_total", len(volumes))
+            prefix = "外傳" if v.get("category") == "side" else ""
+            label = format_index_token(seq_index, seq_total, "padded", prefix)
             cb = ttk.Checkbutton(
                 self._cb_frame,
-                text=f"  {str(v['index']).zfill(pad)}  {v['name']}",
+                text=f"  {label}  {v['name']}",
                 variable=var,
             )
             cb.pack(anchor="w", fill="x", padx=4, pady=1)
