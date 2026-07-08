@@ -138,3 +138,12 @@ def format_index_token(seq_index: int, seq_total: int,
     else:  # "plain"
         num = str(seq_index)
     return f"{index_prefix}{num}"
+
+
+def classify_volumes(volumes: list[dict], side_keywords: list[str]) -> list[dict]:
+    """為每一卷加上 category（'main'/'side'），用 classify_volume() 判斷。
+    回傳新 list，不修改原始輸入，保留原始順序。"""
+    return [
+        {**v, "category": classify_volume(v["name"], side_keywords)}
+        for v in volumes
+    ]

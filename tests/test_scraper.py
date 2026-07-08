@@ -5,6 +5,7 @@ from src.scraper import (
     parse_volumes,
     parse_book_title,
     format_index_token,
+    classify_volumes,
 )
 
 SAMPLE_HTML = """
@@ -98,3 +99,34 @@ def test_format_index_token_none_ignores_prefix():
 
 def test_format_index_token_triple_digit_padding():
     assert format_index_token(1, 100, "padded", "") == "001"
+
+
+def test_classify_volumes_detects_side_keyword():
+    volumes = [
+        {"index": 1, "name": "第一卷", "first_cid": 100, "vid": 99},
+        {"index": 2, "name": "番外篇·SS", "first_cid": 200, "vid": 199},
+    ]
+    result = classify_volumes(volumes, ["番外", "SS"])
+    assert result[0]["category"] == "main"
+    assert result[1]["category"] == "side"
+
+
+def test_classify_volumes_empty_keywords_all_main():
+    volumes = [{"index": 1, "name": "任何名字", "first_cid": 100, "vid": 99}]
+    result = classify_volumes(volumes, [])
+    assert result[0]["category"] == "main"
+
+
+def test_classify_volumes_does_not_mutate_input():
+    volumes = [{"index": 1, "name": "第一卷", "first_cid": 100, "vid": 99}]
+    classify_volumes(volumes, [])
+    assert "category" not in volumes[0]
+
+
+def test_classify_volumes_preserves_order():
+    volumes = [
+        {"index": 1, "name": "第一卷", "first_cid": 100, "vid": 99},
+        {"index": 2, "name": "第二卷", "first_cid": 200, "vid": 199},
+    ]
+    result = classify_volumes(volumes, [])
+    assert [v["name"] for v in result] == ["第一卷", "第二卷"]
