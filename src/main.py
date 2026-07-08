@@ -937,6 +937,19 @@ class App:
             cb.pack(anchor="w", fill="x", padx=4, pady=1)
         self._check_canvas.yview_moveto(0)
 
+    def _reset_book_state(self):
+        """清空跟目前這本書相關的狀態：卷列表、失敗/亂碼清單與對應按鈕。
+        載入新書、或 Preview 視窗取消時共用，避免舊書的清單/按鈕狀態殘留到下一本書。"""
+        self._fail_volumes = []
+        self._garbled_volumes = []
+        self._build_checkbox_list([])
+        self.btn_download.config(state="disabled")
+        self.btn_select_all.config(state="disabled")
+        self.btn_deselect_all.config(state="disabled")
+        self.btn_retry.config(state="disabled", text="重試失敗")
+        self.btn_manage.config(state="disabled")
+        self.btn_repair.config(state="disabled", text="修復亂碼")
+
     def _open_preview_dialog(self, book_name: str, volumes: list[dict]):
         win = tk.Toplevel(self.root)
         win.title(f"確認分類 - {book_name}")
@@ -1050,6 +1063,7 @@ class App:
             self._aid = None
             self._book_name = None
             self._volumes = []
+            self._reset_book_state()
             self.title_label.config(text="（輸入網址後點「載入」）")
             self.progress_label.config(text="等待中...")
             self._set_status("已取消載入", "info")
@@ -1097,10 +1111,8 @@ class App:
             return
 
         self._aid = aid
+        self._reset_book_state()
         self.btn_load.config(state="disabled")
-        self.btn_download.config(state="disabled")
-        self.btn_select_all.config(state="disabled")
-        self.btn_deselect_all.config(state="disabled")
         self.title_label.config(text="載入中...")
         self.progress_bar.config(mode="indeterminate")
         self.progress_bar.start(10)
