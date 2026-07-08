@@ -31,6 +31,19 @@ def test_download_success(tmp_path):
     assert os.path.getsize(fp) > 0
 
 
+def test_download_strips_utf16_bom(tmp_path):
+    """charset=utf-8 實際回傳 UTF-16 LE bytes；BOM 本身不該混進解碼後的文字內容"""
+    content = b"\xff\xfe" + ("軟體" * 30).encode("utf-16-le")
+    session = _mock_session([_ok_resp(content=content)])
+    fp = str(tmp_path / "vol.txt")
+    with patch("src.downloader._get_session", return_value=session):
+        assert download_volume("1861", 65280, fp) is True
+    with open(fp, encoding="utf-8") as f:
+        text = f.read()
+    assert not text.startswith("﻿")
+    assert "軟體" in text
+
+
 def test_download_retry_then_success(tmp_path):
     session = _mock_session([
         Exception("timeout"),
@@ -54,7 +67,7 @@ def test_download_all_fail(tmp_path):
 
 def test_build_filepath_basic():
     path = build_filepath("downloads", "灼眼的夏娜", 1, "第一卷", 18)
-    expected = os.path.join("downloads", "灼眼的夏娜", "01 灼眼的夏娜 第一卷.txt")
+    expected = os.path.join("downloads", "01 灼眼的夏娜 第一卷.txt")
     assert path == expected
 
 
@@ -145,28 +158,28 @@ def test_download_converts_to_traditional(tmp_path):
 
 def test_build_filepath_plain_index():
     path = build_filepath("downloads", "書名", 1, "第一卷", 10, index_fmt="plain")
-    assert path == os.path.join("downloads", "書名", "1 書名 第一卷.txt")
+    assert path == os.path.join("downloads", "1 書名 第一卷.txt")
 
 
 def test_build_filepath_no_index():
     path = build_filepath("downloads", "書名", 1, "第一卷", 10, index_fmt="none")
-    assert path == os.path.join("downloads", "書名", "書名 第一卷.txt")
+    assert path == os.path.join("downloads", "書名 第一卷.txt")
 
 
 def test_build_filepath_no_book_name():
     path = build_filepath("downloads", "書名", 1, "第一卷", 10, include_book_name=False)
-    assert path == os.path.join("downloads", "書名", "01 第一卷.txt")
+    assert path == os.path.join("downloads", "01 第一卷.txt")
 
 
 def test_build_filepath_custom_separator():
     path = build_filepath("downloads", "書名", 1, "第一卷", 10, separator="_")
-    assert path == os.path.join("downloads", "書名", "01_書名_第一卷.txt")
+    assert path == os.path.join("downloads", "01_書名_第一卷.txt")
 
 
 def test_build_filepath_no_index_no_book():
     path = build_filepath("downloads", "書名", 1, "第一卷", 10,
                           index_fmt="none", include_book_name=False)
-    assert path == os.path.join("downloads", "書名", "第一卷.txt")
+    assert path == os.path.join("downloads", "第一卷.txt")
 
 
 def test_run_download_all_has_naming_params():
@@ -185,7 +198,7 @@ def test_run_download_all_naming_params_applied(tmp_path):
     with patch("src.downloader._get_session", return_value=session):
         run_download_all("1", "書名", volumes, str(tmp_path), q,
                          index_fmt="none", include_book_name=False, separator="_")
-    expected = os.path.join(str(tmp_path), "書名", "第一卷.txt")
+    expected = os.path.join(str(tmp_path), "第一卷.txt")
     assert os.path.exists(expected)
 
 
@@ -193,10 +206,10 @@ def test_build_filepath_unsafe_separator_stripped():
     """Windows-illegal chars in separator are stripped (not silently misrouted)"""
     path = build_filepath("downloads", "書名", 1, "第一卷", 10, separator="/")
     # "/" stripped → separator becomes "" → falls back to " "
-    assert path == os.path.join("downloads", "書名", "01 書名 第一卷.txt")
+    assert path == os.path.join("downloads", "01 書名 第一卷.txt")
 
     path2 = build_filepath("downloads", "書名", 1, "第一卷", 10, separator=":")
-    assert path2 == os.path.join("downloads", "書名", "01 書名 第一卷.txt")
+    assert path2 == os.path.join("downloads", "01 書名 第一卷.txt")
 
 
 def test_check_garbled_clean(tmp_path):
@@ -237,10 +250,10 @@ def test_repair_volume_uses_gbk_when_utf8_garbled(tmp_path):
 
 def test_repair_volume_returns_true_when_both_encodings_garbled(tmp_path):
     """兩種編碼都有亂碼時回傳 True"""
-    # \x80*100: invalid UTF-8 → all U+FFFD
+    # \x80*100: invalid UTF-8 → all U+FFFD (does not collide with any BOM prefix)
     invalid_for_utf8 = b"\x80" * 100
-    # \xff\xfe*60: invalid in both UTF-8 and GBK → all U+FFFD when decoded with errors='replace'
-    invalid_for_gbk = b"\xff\xfe" * 60
+    # \xff*60: invalid GBK → all U+FFFD (avoid \xff\xfe, which is a UTF-16 LE BOM)
+    invalid_for_gbk = b"\xff" * 60
 
     def mock_get(url, **kwargs):
         resp = MagicMock()

@@ -81,6 +81,33 @@ def test_run_convert_all_handles_missing_file(tmp_path):
     assert msgs[0][1] is False
 
 
+def test_run_convert_all_detects_gbk_encoding(tmp_path):
+    fp = tmp_path / "test.txt"
+    fp.write_bytes("软件".encode("gbk"))
+    q = queue.Queue()
+    run_convert_all([str(fp)], "overwrite", q)
+    assert fp.read_text(encoding="utf-8") == "軟體"
+    msgs = []
+    while not q.empty():
+        msgs.append(q.get())
+    log_msg = next(m for m in msgs if m[0] == "conv_log")
+    assert log_msg[1] is True
+    assert "GBK" in log_msg[3]
+
+
+def test_run_convert_all_detects_utf16_bom(tmp_path):
+    fp = tmp_path / "test.txt"
+    fp.write_bytes(b"\xff\xfe" + "软件".encode("utf-16-le"))
+    q = queue.Queue()
+    run_convert_all([str(fp)], "overwrite", q)
+    assert fp.read_text(encoding="utf-8") == "軟體"
+    msgs = []
+    while not q.empty():
+        msgs.append(q.get())
+    log_msg = next(m for m in msgs if m[0] == "conv_log")
+    assert "UTF-16" in log_msg[3]
+
+
 def test_run_convert_all_multiple_files(tmp_path):
     files = []
     for i in range(3):

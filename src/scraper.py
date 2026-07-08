@@ -47,6 +47,11 @@ def parse_aid_from_url(url: str) -> str:
     if "aid" in params:
         return params["aid"][0]
 
+    # wenku8.net/novel/{分類}/1861/index.htm，取最後一組數字（書號）才是 aid
+    m = re.search(r"/novel/\d+/(\d+)/", url)
+    if m:
+        return m.group(1)
+
     # wenku8.net/book/1861.htm 或 /novel/1861/
     m = re.search(r"/(?:book|novel)/(\d+)", url)
     if m:

@@ -121,6 +121,7 @@ class App:
         self._fname_separator = _cfg.get("filename_separator", " ")
         self._side_keywords: list[str] = _cfg.get("side_keywords", list(DEFAULT_SIDE_KEYWORDS))
         self._garbled_volumes: list = []
+        self._last_batch_vids: set = set()
         self._repair_mode = False
         self._skip_event = threading.Event()
         self._browsing = False
@@ -159,7 +160,7 @@ class App:
 
         self.btn_load = ttk.Button(url_row, text="載入", command=self._on_load, width=8)
         self.btn_load.grid(row=0, column=1)
-        ttk.Button(url_row, text="⚙", command=self._open_settings, width=4).grid(
+        ttk.Button(url_row, text="⚙", command=self._goto_settings_tab, width=4).grid(
             row=0, column=2, padx=(4, 0)
         )
 
@@ -213,7 +214,7 @@ class App:
             "<Configure>",
             lambda e: self._check_canvas.itemconfig(self._cb_window, width=e.width),
         )
-        self._check_canvas.bind("<MouseWheel>", self._on_canvas_scroll)
+        self._enable_wheel_scroll(self._check_canvas)
 
         self._check_vars: list[tk.BooleanVar] = []
 
@@ -277,6 +278,10 @@ class App:
         self._notebook.add(tab_convert, text="  轉換  ")
         self._build_convert_tab(tab_convert)
 
+        self._tab_settings = ttk.Frame(self._notebook)
+        self._notebook.add(self._tab_settings, text="  設定  ")
+        self._build_settings_tab(self._tab_settings)
+
         # === Status Bar ===
         sep = ttk.Separator(self.root, orient="horizontal")
         sep.grid(row=98, column=0, sticky="ew")
@@ -297,12 +302,17 @@ class App:
     def _build_convert_tab(self, tab: ttk.Frame):
         pad = {"padx": 14, "pady": 6}
         tab.columnconfigure(0, weight=1)
-        tab.rowconfigure(1, weight=1)
-        tab.rowconfigure(3, weight=1)
+        tab.rowconfigure(2, weight=1)
+        tab.rowconfigure(4, weight=1)
+
+        ttk.Label(
+            tab, text="把已下載的 TXT 檔案批次轉換成台灣繁體中文（簡轉繁），不需要重新下載。",
+            font=FH, foreground="gray"
+        ).grid(row=0, column=0, sticky="w", padx=14, pady=(10, 0))
 
         # Header：計數 + 選擇檔案按鈕
         frame_header = ttk.Frame(tab)
-        frame_header.grid(row=0, column=0, sticky="ew", **pad)
+        frame_header.grid(row=1, column=0, sticky="ew", **pad)
         frame_header.columnconfigure(0, weight=1)
 
         self._conv_count_label = ttk.Label(
@@ -315,7 +325,7 @@ class App:
 
         # 檔案列表（可捲動）
         frame_files = ttk.LabelFrame(tab, text=" 檔案列表 ", padding=8)
-        frame_files.grid(row=1, column=0, sticky="nsew", padx=14, pady=(0, 6))
+        frame_files.grid(row=2, column=0, sticky="nsew", padx=14, pady=(0, 6))
         frame_files.columnconfigure(0, weight=1)
         frame_files.rowconfigure(0, weight=1)
 
@@ -343,11 +353,11 @@ class App:
                 self._conv_file_window, width=e.width
             ),
         )
-        self._conv_canvas.bind("<MouseWheel>", self._on_canvas_scroll)
+        self._enable_wheel_scroll(self._conv_canvas)
 
         # 輸出模式 + 開始按鈕
         frame_output = ttk.Frame(tab)
-        frame_output.grid(row=2, column=0, sticky="ew", padx=14, pady=(0, 6))
+        frame_output.grid(row=3, column=0, sticky="ew", padx=14, pady=(0, 6))
 
         ttk.Label(frame_output, text="輸出：", font=FS).pack(side="left")
         self._conv_output_var = tk.StringVar(value="overwrite")
@@ -368,7 +378,7 @@ class App:
 
         # 記錄區
         frame_conv_log = ttk.LabelFrame(tab, text=" 記錄 ", padding=8)
-        frame_conv_log.grid(row=3, column=0, sticky="nsew", padx=14, pady=(0, 6))
+        frame_conv_log.grid(row=4, column=0, sticky="nsew", padx=14, pady=(0, 6))
         frame_conv_log.columnconfigure(0, weight=1)
         frame_conv_log.rowconfigure(0, weight=1)
 
@@ -433,6 +443,19 @@ class App:
     def _set_status(self, msg: str, level: str = "info"):
         self.msg_queue.put(("status", (msg, level)))
 
+    def _ensure_output_dir(self) -> str | None:
+        """驗證下載路徑可用；不可用時顯示錯誤並回傳 None，避免背景執行緒卡死。"""
+        path = self._path_var.get().strip()
+        if not path:
+            self._set_status("下載路徑不能為空，請先設定「下載至」", "error")
+            return None
+        try:
+            os.makedirs(path, exist_ok=True)
+        except OSError as e:
+            self._set_status(f"下載路徑無法使用：{path}（{e}）", "error")
+            return None
+        return path
+
     def _on_browse_folder(self):
         from tkinter import filedialog
         self._browsing = True
@@ -460,13 +483,20 @@ class App:
 
     # ---- 主題 ----
 
+    # ⚠ sv-ttk 已知效能問題：用 sprite-sheet 圖片裁切畫元件（非原生繪製）。
+    # 本專案卷列表、轉換檔案清單、識別關鍵字清單都會動態大量建立/銷毀 widget，
+    # 每次操作會在 Tcl 端觸發明顯卡頓，跟 Python 端邏輯無關。停用後卡頓消失。
+    # 詳見 C:\Users\CTH\.claude\project-rules\windows-tool\tkinter-ui\INDEX.md
+    USE_SV_TTK = False
+
     def _apply_theme(self, theme_key: str):
         t = THEMES.get(theme_key, THEMES["light"])
-        try:
-            import sv_ttk
-            sv_ttk.set_theme(t["sv"])
-        except ImportError:
-            pass
+        if self.USE_SV_TTK:
+            try:
+                import sv_ttk
+                sv_ttk.set_theme(t["sv"])
+            except ImportError:
+                pass
 
         from tkinter import font as tkfont
         for fname in ("TkDefaultFont", "TkTextFont", "TkMenuFont", "TkHeadingFont"):
@@ -476,6 +506,7 @@ class App:
         style.configure("TButton", font=F)
         style.configure("TEntry", font=F)
         style.configure("TCombobox", font=F)
+        style.configure("TNotebook.Tab", font=FB, padding=(20, 10))
         style.configure("TLabelframe.Label", font=F, foreground=t["frame_title"])
         label_fg = t["label_fg"]
         for w in ("TLabel", "TCheckbutton", "TRadiobutton"):
@@ -488,22 +519,220 @@ class App:
         self._conv_log.config(bg=t["log_bg"], fg=t["log_fg"], insertbackground=t["log_fg"])
         self._current_theme = theme_key
 
-    # ---- 設定視窗 ----
+    # ---- 設定 tab ----
 
-    def _open_settings(self):
+    def _goto_settings_tab(self):
+        self._notebook.select(self._tab_settings)
+
+    def _build_settings_tab(self, tab: ttk.Frame):
+        tab.columnconfigure(0, weight=1)
+        tab.columnconfigure(1, weight=0)
+        tab.rowconfigure(0, weight=1)
+
+        canvas = tk.Canvas(tab, highlightthickness=0)
+        vsb = ttk.Scrollbar(tab, orient="vertical", command=canvas.yview)
+        canvas.configure(yscrollcommand=vsb.set)
+        canvas.grid(row=0, column=0, sticky="nsew", padx=(14, 0), pady=(12, 0))
+        vsb.grid(row=0, column=1, sticky="ns", pady=(12, 0))
+        self._enable_wheel_scroll(canvas)
+
+        content = ttk.Frame(canvas, padding=(0, 0, 14, 12))
+        content_win = canvas.create_window((0, 0), window=content, anchor="nw")
+        content.bind(
+            "<Configure>",
+            lambda e: canvas.configure(scrollregion=canvas.bbox("all")),
+        )
+        canvas.bind(
+            "<Configure>",
+            lambda e: canvas.itemconfig(content_win, width=e.width),
+        )
+
+        # ===== 外觀 =====
+        ttk.Label(content, text="外觀", font=FB).pack(anchor="w", pady=(0, 6))
+        appearance_row = ttk.Frame(content)
+        appearance_row.pack(fill="x")
+        self._theme_summary_label = ttk.Label(
+            appearance_row, text=self._theme_summary_text(), font=F, foreground="gray"
+        )
+        self._theme_summary_label.pack(side="left")
+        ttk.Button(
+            appearance_row, text="外觀設定...", command=self._open_appearance_dialog, width=14
+        ).pack(side="right", ipady=4)
+
+        ttk.Separator(content, orient="horizontal").pack(fill="x", pady=16)
+
+        # ===== 下載 =====
+        ttk.Label(content, text="下載", font=FB).pack(anchor="w", pady=(0, 8))
+
+        row1 = ttk.Frame(content)
+        row1.pack(fill="x", pady=(0, 6))
+        ttk.Label(row1, text="重試次數：", font=F).pack(side="left")
+        retry_infinite = self._retry_count <= 0
+        self._retry_count_var = tk.IntVar(value=self._retry_count if not retry_infinite else 3)
+        self._retry_count_spin = ttk.Spinbox(
+            row1, from_=1, to=10, textvariable=self._retry_count_var,
+            width=5, font=F
+        )
+        self._retry_count_spin.pack(side="left", padx=(8, 4))
+        ttk.Label(row1, text="次", font=F).pack(side="left")
+
+        row1b = ttk.Frame(content)
+        row1b.pack(fill="x", pady=(0, 12))
+        self._retry_infinite_var = tk.BooleanVar(value=retry_infinite)
+
+        def _on_infinite_toggle(*_):
+            self._retry_count_spin.config(
+                state="disabled" if self._retry_infinite_var.get() else "normal"
+            )
+
+        self._on_infinite_toggle = _on_infinite_toggle
+        ttk.Checkbutton(
+            row1b, text="無限重試（直到成功或手動跳過）",
+            variable=self._retry_infinite_var, command=_on_infinite_toggle
+        ).pack(side="left")
+        _on_infinite_toggle()
+
+        row2 = ttk.Frame(content)
+        row2.pack(fill="x")
+        ttk.Label(row2, text="重試間隔：", font=F).pack(side="left")
+        self._retry_delay_var = tk.IntVar(value=self._retry_delay)
+        ttk.Spinbox(
+            row2, from_=1, to=30, textvariable=self._retry_delay_var,
+            width=5, font=F
+        ).pack(side="left", padx=(8, 4))
+        ttk.Label(row2, text="秒", font=F).pack(side="left")
+
+        ttk.Separator(content, orient="horizontal").pack(fill="x", pady=16)
+
+        # ===== 命名 =====
+        ttk.Label(content, text="命名", font=FB).pack(anchor="w", pady=(0, 8))
+
+        ttk.Label(content, text="序號格式", font=FB).pack(anchor="w", pady=(0, 6))
+        self._fname_index_var = tk.StringVar(value=self._fname_index)
+        for val, label in [("padded", "零補位（01, 02…）"),
+                            ("plain",  "純數字（1, 2…）"),
+                            ("none",   "不顯示")]:
+            ttk.Radiobutton(
+                content, text=label,
+                variable=self._fname_index_var, value=val
+            ).pack(anchor="w", pady=2)
+
+        ttk.Separator(content, orient="horizontal").pack(fill="x", pady=10)
+
+        # 書名開關
+        self._fname_book_var = tk.BooleanVar(value=self._fname_book_name)
+        ttk.Checkbutton(
+            content, text="檔名含書名", variable=self._fname_book_var
+        ).pack(anchor="w")
+
+        ttk.Separator(content, orient="horizontal").pack(fill="x", pady=10)
+
+        # 分隔符號
+        sep_row = ttk.Frame(content)
+        sep_row.pack(anchor="w")
+        ttk.Label(sep_row, text="分隔符號：", font=F).pack(side="left")
+        self._fname_sep_var = tk.StringVar(value=self._fname_separator)
+        ttk.Entry(sep_row, textvariable=self._fname_sep_var, width=5, font=FM).pack(side="left")
+        ttk.Label(sep_row, text="（空白 = 空格）", font=FH, foreground="gray").pack(
+            side="left", padx=(6, 0)
+        )
+
+        ttk.Separator(content, orient="horizontal").pack(fill="x", pady=10)
+
+        # 即時預覽
+        naming_preview_label = ttk.Label(content, text="", font=FM)
+        naming_preview_label.pack(anchor="w")
+
+        def _update_naming_preview(*_):
+            idx = self._fname_index_var.get()
+            book = self._fname_book_var.get()
+            sep = self._fname_sep_var.get() or " "
+            parts = []
+            if idx == "padded":
+                parts.append("01")
+            elif idx == "plain":
+                parts.append("1")
+            if book:
+                parts.append("書名")
+            parts.append("第一卷")
+            naming_preview_label.config(text="預覽：" + sep.join(parts) + ".txt")
+
+        self._fname_index_var.trace_add("write", _update_naming_preview)
+        self._fname_book_var.trace_add("write", _update_naming_preview)
+        self._fname_sep_var.trace_add("write", _update_naming_preview)
+        _update_naming_preview()
+
+        ttk.Separator(content, orient="horizontal").pack(fill="x", pady=16)
+
+        # ===== 識別 =====
+        ttk.Label(content, text="識別（外傳關鍵字）", font=FB).pack(anchor="w", pady=(0, 6))
+        identify_row = ttk.Frame(content)
+        identify_row.pack(fill="x")
+        self._kw_summary_label = ttk.Label(
+            identify_row, text=self._kw_summary_text(), font=F, foreground="gray"
+        )
+        self._kw_summary_label.pack(side="left")
+        ttk.Button(
+            identify_row, text="識別設定...", command=self._open_identify_dialog, width=14
+        ).pack(side="right", ipady=4)
+
+        # ===== 套用 / 取消（固定在底部，不隨內容捲動）=====
+        btn_row = ttk.Frame(tab)
+        btn_row.grid(row=1, column=0, columnspan=2, pady=(8, 12))
+        ttk.Button(btn_row, text="套用", command=self._apply_settings, width=10).pack(
+            side="left", padx=4, ipady=4
+        )
+        ttk.Button(btn_row, text="取消", command=self._reset_settings_fields, width=10).pack(
+            side="left", padx=4, ipady=4
+        )
+
+    def _apply_settings(self):
+        """套用「設定」tab 上直接可見的欄位（下載／命名）。外觀、識別各自有獨立彈出視窗即時套用。"""
+        self._retry_count = 0 if self._retry_infinite_var.get() else self._retry_count_var.get()
+        self._retry_delay = self._retry_delay_var.get()
+        self._fname_index = self._fname_index_var.get()
+        self._fname_book_name = self._fname_book_var.get()
+        self._fname_separator = self._fname_sep_var.get() or " "
+        self._save_config({
+            "retry_count": self._retry_count,
+            "retry_delay": self._retry_delay,
+            "filename_index": self._fname_index,
+            "filename_book_name": self._fname_book_name,
+            "filename_separator": self._fname_separator,
+        })
+        self._set_status("設定已套用", "success")
+
+    def _reset_settings_fields(self):
+        """取消：把設定 tab 上的欄位還原成目前實際生效的值（未套用的修改會被丟棄）。"""
+        retry_infinite = self._retry_count <= 0
+        self._retry_count_var.set(self._retry_count if not retry_infinite else 3)
+        self._retry_infinite_var.set(retry_infinite)
+        self._on_infinite_toggle()
+        self._retry_delay_var.set(self._retry_delay)
+        self._fname_index_var.set(self._fname_index)
+        self._fname_book_var.set(self._fname_book_name)
+        self._fname_sep_var.set(self._fname_separator)
+
+    # ---- 外觀設定（彈出視窗）----
+
+    def _theme_summary_text(self) -> str:
+        return f"目前主題：{THEMES.get(self._current_theme, THEMES['light'])['name']}"
+
+    def _kw_summary_text(self) -> str:
+        return f"目前共 {len(self._side_keywords)} 個關鍵字"
+
+    def _open_appearance_dialog(self):
         win = tk.Toplevel(self.root)
-        win.title("設定")
-        win.resizable(False, False)
+        win.title("外觀設定")
+        win.resizable(True, True)
+        win.minsize(420, 340)
         win.grab_set()
 
-        notebook = ttk.Notebook(win)
-        notebook.pack(fill="both", expand=True, padx=16, pady=(12, 0))
-
-        tab_appearance = ttk.Frame(notebook, padding=12)
-        notebook.add(tab_appearance, text="  外觀  ")
-        left = ttk.Frame(tab_appearance)
+        body = ttk.Frame(win, padding=16)
+        body.pack(fill="both", expand=True)
+        left = ttk.Frame(body)
         left.pack(side="left", anchor="n", padx=(0, 16))
-        right = ttk.Frame(tab_appearance)
+        right = ttk.Frame(body)
         right.pack(side="left", anchor="n")
 
         ttk.Label(left, text="配色主題").pack(anchor="w", pady=(0, 10))
@@ -513,7 +742,10 @@ class App:
                 left, text=info["name"], variable=theme_var, value=key
             ).pack(anchor="w", pady=4)
 
-        preview = tk.Canvas(right, width=210, height=168, highlightthickness=1,
+        # 固定比例放大原本 210x168 的預覽尺寸（不隨視窗縮放，避免字體比例跑掉）
+        S = 1.6
+        PW, PH = round(210 * S), round(168 * S)
+        preview = tk.Canvas(right, width=PW, height=PH, highlightthickness=1,
                             highlightbackground="#CCCCCC")
         preview.pack()
         ttk.Label(right, text="預覽", foreground="gray").pack(pady=(4, 0))
@@ -522,134 +754,79 @@ class App:
             t = THEMES.get(key, THEMES["light"])
             c = preview
             c.delete("all")
-            W, H = 210, 168
-            c.create_rectangle(0, 0, W, H, fill=t["win_bg"], outline="")
+            v = lambda n: round(n * S)
+            fs = round(7 * S)
+            c.create_rectangle(0, 0, PW, PH, fill=t["win_bg"], outline="")
             tbar_bg = t["card_bg"] if t["sv"] == "light" else "#2D2D2D"
-            c.create_rectangle(0, 0, W, 22, fill=tbar_bg, outline="")
-            c.create_text(10, 11, text="Wenku8 Downloader", anchor="w",
-                          fill=t["frame_title"], font=("Microsoft JhengHei", 7, "bold"))
-            c.create_rectangle(8, 28, W - 8, 68, fill=t["card_bg"], outline=t["border"])
-            c.create_text(16, 33, text=" 書籍目錄網址 ", anchor="w",
-                          fill=t["frame_title"], font=("Microsoft JhengHei", 7, "bold"))
-            c.create_rectangle(16, 44, W - 16, 58, fill=t["log_bg"], outline=t["border"])
-            bx1, bx2 = 65, 145
-            c.create_rectangle(bx1, 74, bx2, 88, fill=t["btn_bg"], outline="")
-            c.create_text((bx1 + bx2) // 2, 81, text="下載全部",
-                          fill=t["btn_fg"], font=("Microsoft JhengHei", 7))
-            c.create_rectangle(8, 94, W - 8, H - 6, fill=t["card_bg"], outline=t["border"])
-            c.create_text(16, 99, text=" 進度 ", anchor="w",
-                          fill=t["frame_title"], font=("Microsoft JhengHei", 7, "bold"))
+            c.create_rectangle(0, 0, PW, v(22), fill=tbar_bg, outline="")
+            c.create_text(v(10), v(11), text="Wenku8 Downloader", anchor="w",
+                          fill=t["frame_title"], font=("Microsoft JhengHei", fs, "bold"))
+            c.create_rectangle(v(8), v(28), PW - v(8), v(68), fill=t["card_bg"], outline=t["border"])
+            c.create_text(v(16), v(33), text=" 書籍目錄網址 ", anchor="w",
+                          fill=t["frame_title"], font=("Microsoft JhengHei", fs, "bold"))
+            c.create_rectangle(v(16), v(44), PW - v(16), v(58), fill=t["log_bg"], outline=t["border"])
+            bx1, bx2 = v(65), v(145)
+            c.create_rectangle(bx1, v(74), bx2, v(88), fill=t["btn_bg"], outline="")
+            c.create_text((bx1 + bx2) / 2, v(81), text="下載全部",
+                          fill=t["btn_fg"], font=("Microsoft JhengHei", fs))
+            c.create_rectangle(v(8), v(94), PW - v(8), PH - v(6), fill=t["card_bg"], outline=t["border"])
+            c.create_text(v(16), v(99), text=" 進度 ", anchor="w",
+                          fill=t["frame_title"], font=("Microsoft JhengHei", fs, "bold"))
             bar_bg = "#E5E5E5" if t["sv"] == "light" else "#3A3A3A"
-            c.create_rectangle(16, 110, W - 16, 116, fill=bar_bg, outline="")
-            c.create_rectangle(16, 110, 70, 116, fill=t["pbar"], outline="")
-            c.create_rectangle(16, 122, W - 16, H - 12, fill=t["log_bg"], outline=t["border"])
-            c.create_text(20, 128, text="等待中...", anchor="nw", fill=t["log_fg"],
-                          font=("Microsoft JhengHei", 7))
+            c.create_rectangle(v(16), v(110), PW - v(16), v(116), fill=bar_bg, outline="")
+            c.create_rectangle(v(16), v(110), v(70), v(116), fill=t["pbar"], outline="")
+            c.create_rectangle(v(16), v(122), PW - v(16), PH - v(12), fill=t["log_bg"], outline=t["border"])
+            c.create_text(v(20), v(128), text="等待中...", anchor="nw", fill=t["log_fg"],
+                          font=("Microsoft JhengHei", fs))
 
         theme_var.trace_add("write", lambda *_: draw_preview(theme_var.get()))
         draw_preview(self._current_theme)
 
-        tab_download = ttk.Frame(notebook, padding=12)
-        notebook.add(tab_download, text="  下載  ")
+        def _apply():
+            self._apply_theme(theme_var.get())
+            self._save_config({"theme": theme_var.get()})
+            self._theme_summary_label.config(text=self._theme_summary_text())
+            win.destroy()
 
-        row1 = ttk.Frame(tab_download)
-        row1.pack(fill="x", pady=(0, 12))
-        ttk.Label(row1, text="重試次數：", font=F).pack(side="left")
-        retry_count_var = tk.IntVar(value=self._retry_count)
-        ttk.Spinbox(
-            row1, from_=1, to=10, textvariable=retry_count_var,
-            width=5, font=F
-        ).pack(side="left", padx=(8, 4))
-        ttk.Label(row1, text="次", font=F).pack(side="left")
-
-        row2 = ttk.Frame(tab_download)
-        row2.pack(fill="x")
-        ttk.Label(row2, text="重試間隔：", font=F).pack(side="left")
-        retry_delay_var = tk.IntVar(value=self._retry_delay)
-        ttk.Spinbox(
-            row2, from_=1, to=30, textvariable=retry_delay_var,
-            width=5, font=F
-        ).pack(side="left", padx=(8, 4))
-        ttk.Label(row2, text="秒", font=F).pack(side="left")
-
-        tab_naming = ttk.Frame(notebook, padding=12)
-        notebook.add(tab_naming, text="  命名  ")
-
-        # 序號格式
-        ttk.Label(tab_naming, text="序號格式", font=FB).pack(anchor="w", pady=(0, 6))
-        fname_index_var = tk.StringVar(value=self._fname_index)
-        for val, label in [("padded", "零補位（01, 02…）"),
-                            ("plain",  "純數字（1, 2…）"),
-                            ("none",   "不顯示")]:
-            ttk.Radiobutton(
-                tab_naming, text=label,
-                variable=fname_index_var, value=val
-            ).pack(anchor="w", pady=2)
-
-        ttk.Separator(tab_naming, orient="horizontal").pack(fill="x", pady=10)
-
-        # 書名開關
-        fname_book_var = tk.BooleanVar(value=self._fname_book_name)
-        ttk.Checkbutton(
-            tab_naming, text="檔名含書名", variable=fname_book_var
-        ).pack(anchor="w")
-
-        ttk.Separator(tab_naming, orient="horizontal").pack(fill="x", pady=10)
-
-        # 分隔符號
-        sep_row = ttk.Frame(tab_naming)
-        sep_row.pack(anchor="w")
-        ttk.Label(sep_row, text="分隔符號：", font=F).pack(side="left")
-        fname_sep_var = tk.StringVar(value=self._fname_separator)
-        ttk.Entry(sep_row, textvariable=fname_sep_var, width=5, font=FM).pack(side="left")
-        ttk.Label(sep_row, text="（空白 = 空格）", font=FH, foreground="gray").pack(
-            side="left", padx=(6, 0)
+        btn_row = ttk.Frame(win)
+        btn_row.pack(pady=(4, 16))
+        ttk.Button(btn_row, text="套用", command=_apply, width=10).pack(
+            side="left", padx=4, ipady=4
+        )
+        ttk.Button(btn_row, text="取消", command=win.destroy, width=10).pack(
+            side="left", padx=4, ipady=4
         )
 
-        ttk.Separator(tab_naming, orient="horizontal").pack(fill="x", pady=10)
+    # ---- 識別設定（彈出視窗）----
 
-        # 即時預覽
-        preview_label = ttk.Label(tab_naming, text="", font=FM)
-        preview_label.pack(anchor="w")
+    def _open_identify_dialog(self):
+        win = tk.Toplevel(self.root)
+        win.title("識別設定（外傳關鍵字）")
+        win.resizable(True, True)
+        win.geometry("440x560")
+        win.minsize(360, 360)
+        win.grab_set()
 
-        def _update_naming_preview(*_):
-            idx = fname_index_var.get()
-            book = fname_book_var.get()
-            sep = fname_sep_var.get() or " "
-            parts = []
-            if idx == "padded":
-                parts.append("01")
-            elif idx == "plain":
-                parts.append("1")
-            if book:
-                parts.append("書名")
-            parts.append("第一卷")
-            preview_label.config(text="預覽：" + sep.join(parts) + ".txt")
+        body = ttk.Frame(win, padding=12)
+        body.pack(fill="both", expand=True)
+        body.columnconfigure(0, weight=1)
+        body.rowconfigure(1, weight=1)
 
-        fname_index_var.trace_add("write", _update_naming_preview)
-        fname_book_var.trace_add("write", _update_naming_preview)
-        fname_sep_var.trace_add("write", _update_naming_preview)
-        _update_naming_preview()
-
-        tab_identify = ttk.Frame(notebook, padding=12)
-        notebook.add(tab_identify, text="  識別  ")
-        tab_identify.columnconfigure(0, weight=1)
-        tab_identify.rowconfigure(1, weight=1)
-
-        ttk.Label(tab_identify, text="外傳關鍵字", font=FB).grid(
+        ttk.Label(body, text="外傳關鍵字", font=FB).grid(
             row=0, column=0, sticky="w", pady=(0, 6)
         )
 
-        id_list_frame = ttk.Frame(tab_identify)
+        id_list_frame = ttk.Frame(body)
         id_list_frame.grid(row=1, column=0, sticky="nsew")
         id_list_frame.columnconfigure(0, weight=1)
         id_list_frame.rowconfigure(0, weight=1)
 
-        id_canvas = tk.Canvas(id_list_frame, highlightthickness=0, height=200)
+        id_canvas = tk.Canvas(id_list_frame, highlightthickness=0)
         id_sb = ttk.Scrollbar(id_list_frame, orient="vertical", command=id_canvas.yview)
         id_canvas.configure(yscrollcommand=id_sb.set)
         id_canvas.grid(row=0, column=0, sticky="nsew")
         id_sb.grid(row=0, column=1, sticky="ns")
+        self._enable_wheel_scroll(id_canvas)
 
         id_kw_frame = ttk.Frame(id_canvas)
         id_kw_win = id_canvas.create_window((0, 0), window=id_kw_frame, anchor="nw")
@@ -660,10 +837,6 @@ class App:
         id_canvas.bind(
             "<Configure>",
             lambda e: id_canvas.itemconfig(id_kw_win, width=e.width),
-        )
-        id_canvas.bind(
-            "<MouseWheel>",
-            lambda e: id_canvas.yview_scroll(int(-1 * (e.delta / 120)), "units"),
         )
 
         kw_list = list(self._side_keywords)
@@ -688,7 +861,7 @@ class App:
                 kw_list.remove(kw)
                 _refresh_kw_list()
 
-        add_row = ttk.Frame(tab_identify)
+        add_row = ttk.Frame(body)
         add_row.grid(row=2, column=0, sticky="ew", pady=(8, 0))
         add_row.columnconfigure(0, weight=1)
         new_kw_var = tk.StringVar()
@@ -709,26 +882,12 @@ class App:
         _refresh_kw_list()
 
         def _apply():
-            self._apply_theme(theme_var.get())
-            self._retry_count = retry_count_var.get()
-            self._retry_delay = retry_delay_var.get()
-            self._fname_index = fname_index_var.get()
-            self._fname_book_name = fname_book_var.get()
-            self._fname_separator = fname_sep_var.get() or " "
             self._side_keywords = list(kw_list)
-            self._save_config({
-                "theme": theme_var.get(),
-                "retry_count": self._retry_count,
-                "retry_delay": self._retry_delay,
-                "filename_index": self._fname_index,
-                "filename_book_name": self._fname_book_name,
-                "filename_separator": self._fname_separator,
-                "side_keywords": self._side_keywords,
-            })
+            self._save_config({"side_keywords": self._side_keywords})
             win.destroy()
 
         btn_row = ttk.Frame(win)
-        btn_row.pack(pady=(12, 16))
+        btn_row.pack(pady=(0, 16))
         ttk.Button(btn_row, text="套用", command=_apply, width=10).pack(
             side="left", padx=4, ipady=4
         )
@@ -770,15 +929,23 @@ class App:
                 variable=var,
             )
             cb.pack(anchor="w", fill="x", padx=4, pady=1)
-            cb.bind("<MouseWheel>", self._on_canvas_scroll)
         self._check_canvas.yview_moveto(0)
 
     def _select_all(self, state: bool):
         for var in self._check_vars:
             var.set(state)
 
-    def _on_canvas_scroll(self, event):
-        self._check_canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
+    def _enable_wheel_scroll(self, canvas: tk.Canvas):
+        """
+        讓滑鼠停在 canvas 內任何子元件（Label、Checkbutton...）上方滾動滾輪也能捲動。
+        Tkinter 的 <MouseWheel> 綁在 canvas 本身時，滑鼠移到子元件上方就收不到事件了
+        （子元件會攔截），所以改用 bind_all 綁在整個 App 層級，用 winfo_ismapped()
+        確保只有目前實際顯示的分頁會真的捲動，彼此不會互相干擾。
+        """
+        def handler(event):
+            if canvas.winfo_ismapped():
+                canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
+        self.root.bind_all("<MouseWheel>", handler, add="+")
 
     # ---- 載入目錄 ----
 
@@ -821,12 +988,15 @@ class App:
         if not selected:
             self._set_status("請至少勾選一卷", "error")
             return
+        output_dir = self._ensure_output_dir()
+        if output_dir is None:
+            return
         self.btn_download.config(state="disabled")
         self.btn_load.config(state="disabled")
         self.btn_select_all.config(state="disabled")
         self.btn_deselect_all.config(state="disabled")
-        self._garbled_volumes = []
         self._repair_mode = False
+        self._last_batch_vids = {v["vid"] for v in selected}
         self._skip_event.clear()
         self.btn_repair.config(state="disabled", text="修復亂碼")
         self.btn_manage.config(state="disabled")
@@ -840,7 +1010,6 @@ class App:
         self.progress_bar["maximum"] = len(selected)
         self._set_status(f"下載中... 共 {len(selected)} 卷", "info")
 
-        output_dir = self._path_var.get()
         threading.Thread(
             target=run_download_all,
             args=(self._aid, self._book_name, selected, output_dir, self.msg_queue,
@@ -853,8 +1022,12 @@ class App:
     def _on_retry(self):
         if not self._fail_volumes:
             return
+        output_dir = self._ensure_output_dir()
+        if output_dir is None:
+            return
         vols = list(self._fail_volumes)
         self._fail_volumes = []
+        self._last_batch_vids = {v["vid"] for v in vols}
         self.btn_retry.config(state="disabled", text="重試失敗")
         self.btn_manage.config(state="disabled")
         self.btn_repair.config(state="disabled", text="修復亂碼")
@@ -872,7 +1045,6 @@ class App:
         self.progress_bar["value"] = 0
         self.progress_bar["maximum"] = len(vols)
         self._set_status(f"重試中... 共 {len(vols)} 卷", "info")
-        output_dir = self._path_var.get()
         threading.Thread(
             target=run_download_all,
             args=(self._aid, self._book_name, vols, output_dir, self.msg_queue,
@@ -892,8 +1064,13 @@ class App:
             f"以下 {len(vols)} 卷偵測到亂碼：\n{names}\n\n嘗試換編碼修復？"
         ):
             return
+        output_dir = self._ensure_output_dir()
+        if output_dir is None:
+            return
         self._garbled_volumes = []
+        self._last_batch_vids = {v["vid"] for v in vols}
         self._repair_mode = True
+        self._skip_event.clear()
         self.btn_repair.config(state="disabled", text="修復亂碼")
         self.btn_retry.config(state="disabled", text="重試失敗")
         self.btn_manage.config(state="disabled")
@@ -901,6 +1078,7 @@ class App:
         self.btn_load.config(state="disabled")
         self.btn_select_all.config(state="disabled")
         self.btn_deselect_all.config(state="disabled")
+        self.btn_skip.config(state="normal")
         self.log_text.config(state="normal")
         self.log_text.insert("end", f"\n── 修復亂碼 {len(vols)} 卷 ──\n")
         self.log_text.see("end")
@@ -908,12 +1086,12 @@ class App:
         self.progress_bar["value"] = 0
         self.progress_bar["maximum"] = len(vols)
         self._set_status(f"修復中... 共 {len(vols)} 卷", "info")
-        output_dir = self._path_var.get()
         threading.Thread(
             target=run_repair_all,
             args=(self._aid, self._book_name, vols, output_dir, self.msg_queue,
                   self._retry_count, self._retry_delay,
                   self._fname_index, self._fname_book_name, self._fname_separator),
+            kwargs={"skip_event": self._skip_event},
             daemon=True,
         ).start()
 
@@ -1045,14 +1223,22 @@ class App:
 
                 elif kind == "done":
                     _, success_count, fail_volumes, garbled_volumes = msg
-                    fail_count = len(fail_volumes)
-                    garbled_count = len(garbled_volumes)
+                    batch_fail_count = len(fail_volumes)
+                    batch_garbled_count = len(garbled_volumes)
                     if self._repair_mode:
-                        total = success_count + fail_count + garbled_count
+                        total = success_count + batch_fail_count + batch_garbled_count
                     else:
-                        total = success_count + fail_count
-                    self._fail_volumes = fail_volumes
-                    self._garbled_volumes = garbled_volumes
+                        total = success_count + batch_fail_count
+                    # 合併而非覆蓋：保留其他批次尚未解決的失敗/亂碼卷，只更新本批次涵蓋到的卷
+                    attempted = self._last_batch_vids
+                    self._fail_volumes = [
+                        v for v in self._fail_volumes if v["vid"] not in attempted
+                    ] + fail_volumes
+                    self._garbled_volumes = [
+                        v for v in self._garbled_volumes if v["vid"] not in attempted
+                    ] + garbled_volumes
+                    fail_count = len(self._fail_volumes)
+                    garbled_count = len(self._garbled_volumes)
                     self.btn_load.config(state="normal")
                     self.btn_download.config(state="normal")
                     self.btn_select_all.config(state="normal")
