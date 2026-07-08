@@ -937,6 +937,126 @@ class App:
             cb.pack(anchor="w", fill="x", padx=4, pady=1)
         self._check_canvas.yview_moveto(0)
 
+    def _open_preview_dialog(self, book_name: str, volumes: list[dict]):
+        win = tk.Toplevel(self.root)
+        win.title(f"確認分類 - {book_name}")
+        win.resizable(True, True)
+        win.geometry("480x520")
+        win.minsize(360, 300)
+        win.grab_set()
+
+        ttk.Label(
+            win, text=f"書名：{book_name}　共 {len(volumes)} 卷", font=FB
+        ).pack(anchor="w", padx=12, pady=(12, 6))
+
+        list_outer = ttk.Frame(win)
+        list_outer.pack(fill="both", expand=True, padx=12)
+        list_outer.columnconfigure(0, weight=1)
+        list_outer.rowconfigure(0, weight=1)
+
+        canvas = tk.Canvas(list_outer, highlightthickness=0)
+        sb = ttk.Scrollbar(list_outer, orient="vertical", command=canvas.yview)
+        canvas.configure(yscrollcommand=sb.set)
+        canvas.grid(row=0, column=0, sticky="nsew")
+        sb.grid(row=0, column=1, sticky="ns")
+        self._enable_wheel_scroll(canvas)
+
+        row_frame = ttk.Frame(canvas)
+        row_win = canvas.create_window((0, 0), window=row_frame, anchor="nw")
+        row_frame.bind(
+            "<Configure>",
+            lambda e: canvas.configure(scrollregion=canvas.bbox("all")),
+        )
+        canvas.bind(
+            "<Configure>",
+            lambda e: canvas.itemconfig(row_win, width=e.width),
+        )
+
+        batch_vars: list[tk.BooleanVar] = []
+        category_vars: list[tk.StringVar] = []
+
+        for v in volumes:
+            row = ttk.Frame(row_frame)
+            row.pack(fill="x", padx=4, pady=2)
+            bvar = tk.BooleanVar(value=False)
+            batch_vars.append(bvar)
+            ttk.Checkbutton(row, variable=bvar).pack(side="left")
+            ttk.Label(row, text=v["name"], font=F, anchor="w").pack(
+                side="left", padx=(4, 8), fill="x", expand=True
+            )
+            cvar = tk.StringVar(value="正式卷" if v["category"] == "main" else "外傳")
+            category_vars.append(cvar)
+            ttk.Combobox(
+                row, textvariable=cvar, values=["正式卷", "外傳"],
+                state="readonly", width=8, font=F
+            ).pack(side="right")
+
+        def _select_all_batch(state: bool):
+            for bv in batch_vars:
+                bv.set(state)
+
+        def _mark_selected(label: str):
+            for bv, cv in zip(batch_vars, category_vars):
+                if bv.get():
+                    cv.set(label)
+
+        btn_row1 = ttk.Frame(win)
+        btn_row1.pack(fill="x", padx=12, pady=(8, 0))
+        ttk.Button(
+            btn_row1, text="全選", command=lambda: _select_all_batch(True), width=8
+        ).pack(side="left", padx=(0, 4))
+        ttk.Button(
+            btn_row1, text="全不選", command=lambda: _select_all_batch(False), width=8
+        ).pack(side="left")
+        ttk.Button(
+            btn_row1, text="已選標為正式卷",
+            command=lambda: _mark_selected("正式卷"), width=14
+        ).pack(side="right", padx=(4, 0))
+        ttk.Button(
+            btn_row1, text="已選標為外傳",
+            command=lambda: _mark_selected("外傳"), width=12
+        ).pack(side="right")
+
+        def _confirm():
+            edited = [
+                {**v, "category": "main" if cv.get() == "正式卷" else "side"}
+                for v, cv in zip(volumes, category_vars)
+            ]
+            final_volumes = resequence_by_category(edited)
+            self._book_name = book_name
+            self._volumes = final_volumes
+            self.title_label.config(
+                text=f"書名：{book_name}　共 {len(final_volumes)} 卷"
+            )
+            self._build_checkbox_list(final_volumes)
+            self.progress_label.config(text="載入完成，勾選要下載的卷後按「下載選取」")
+            self.btn_download.config(state="normal")
+            self.btn_select_all.config(state="normal")
+            self.btn_deselect_all.config(state="normal")
+            self._set_status(
+                f"已載入：{book_name}，共 {len(final_volumes)} 卷", "success"
+            )
+            win.destroy()
+
+        def _cancel():
+            self._aid = None
+            self._book_name = None
+            self._volumes = []
+            self.title_label.config(text="（輸入網址後點「載入」）")
+            self.progress_label.config(text="等待中...")
+            self._set_status("已取消載入", "info")
+            win.destroy()
+
+        btn_row2 = ttk.Frame(win)
+        btn_row2.pack(pady=(8, 12))
+        ttk.Button(btn_row2, text="確認", command=_confirm, width=10).pack(
+            side="left", padx=4, ipady=4
+        )
+        ttk.Button(btn_row2, text="取消", command=_cancel, width=10).pack(
+            side="left", padx=4, ipady=4
+        )
+        win.protocol("WM_DELETE_WINDOW", _cancel)
+
     def _select_all(self, state: bool):
         for var in self._check_vars:
             var.set(state)
@@ -1179,22 +1299,11 @@ class App:
 
                 if kind == "catalog_done":
                     _, book_name, volumes = msg
-                    self._book_name = book_name
-                    self._volumes = volumes
-                    self.title_label.config(
-                        text=f"書名：{book_name}　共 {len(volumes)} 卷"
-                    )
-                    self._build_checkbox_list(volumes)
                     self.progress_bar.stop()
                     self.progress_bar.config(mode="determinate")
-                    self.progress_label.config(text="載入完成，勾選要下載的卷後按「下載選取」")
                     self.btn_load.config(state="normal")
-                    self.btn_download.config(state="normal")
-                    self.btn_select_all.config(state="normal")
-                    self.btn_deselect_all.config(state="normal")
-                    self._set_status(
-                        f"已載入：{book_name}，共 {len(volumes)} 卷", "success"
-                    )
+                    classified = assign_categories_and_sequence(volumes, self._side_keywords)
+                    self._open_preview_dialog(book_name, classified)
 
                 elif kind == "catalog_error":
                     _, err = msg
