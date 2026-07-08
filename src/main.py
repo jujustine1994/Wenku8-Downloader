@@ -1069,8 +1069,13 @@ class App:
         確保只有目前實際顯示的分頁會真的捲動，彼此不會互相干擾。
         """
         def handler(event):
-            if canvas.winfo_ismapped():
-                canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
+            # canvas 可能屬於已關閉的對話框（如 Preview dialog），widget 銷毀後
+            # winfo_ismapped() 會丟 TclError；此時視為「未顯示」，靜默略過即可。
+            try:
+                if canvas.winfo_ismapped():
+                    canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
+            except tk.TclError:
+                pass
         self.root.bind_all("<MouseWheel>", handler, add="+")
 
     # ---- 載入目錄 ----
