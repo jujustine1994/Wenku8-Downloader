@@ -1,6 +1,11 @@
 import pytest
 from bs4 import BeautifulSoup
-from src.scraper import parse_aid_from_url, parse_volumes, parse_book_title
+from src.scraper import (
+    parse_aid_from_url,
+    parse_volumes,
+    parse_book_title,
+    format_index_token,
+)
 
 SAMPLE_HTML = """
 <html>
@@ -73,3 +78,23 @@ def test_parse_book_title_fallback():
     html = "<html><head><title>灼眼的夏娜 - 輕小說文庫</title></head><body></body></html>"
     soup = BeautifulSoup(html, "lxml")
     assert parse_book_title(soup) == "灼眼的夏娜"
+
+
+def test_format_index_token_padded_no_prefix():
+    assert format_index_token(1, 18, "padded", "") == "01"
+
+
+def test_format_index_token_padded_with_prefix():
+    assert format_index_token(1, 5, "padded", "外傳") == "外傳01"
+
+
+def test_format_index_token_plain_with_prefix():
+    assert format_index_token(1, 5, "plain", "外傳") == "外傳1"
+
+
+def test_format_index_token_none_ignores_prefix():
+    assert format_index_token(1, 5, "none", "外傳") == ""
+
+
+def test_format_index_token_triple_digit_padding():
+    assert format_index_token(1, 100, "padded", "") == "001"

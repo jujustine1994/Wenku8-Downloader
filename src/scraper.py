@@ -122,3 +122,19 @@ def parse_volumes(soup: BeautifulSoup) -> list[dict]:
                     found_first_chapter = True
 
     return volumes
+
+
+def format_index_token(seq_index: int, seq_total: int,
+                       index_fmt: str = "padded", index_prefix: str = "") -> str:
+    """
+    組出檔名/畫面顯示共用的編號文字。index_fmt == "none" 時忽略 index_prefix，
+    回傳空字串（維持「不顯示」語意一致）。
+    """
+    if index_fmt == "none":
+        return ""
+    if index_fmt == "padded":
+        pad = max(len(str(seq_total)), 2)
+        num = str(seq_index).zfill(pad)
+    else:  # "plain"
+        num = str(seq_index)
+    return f"{index_prefix}{num}"
