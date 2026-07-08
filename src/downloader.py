@@ -184,14 +184,17 @@ def run_download_all(aid: str, book_name: str, volumes: list[dict],
     success = 0
     fail_volumes: list[dict] = []
     garbled_volumes: list[dict] = []
-    pad = max(len(str(total)), 2)
 
     for i, vol in enumerate(volumes, 1):
         msg_queue.put(("progress", i, total, vol["name"]))
-        index_str = str(vol["index"]).zfill(pad)
+        seq_index = vol.get("seq_index", vol["index"])
+        seq_total = vol.get("seq_total", total)
+        prefix = "外傳" if vol.get("category") == "side" else ""
+        index_str = format_index_token(seq_index, seq_total, "padded", prefix)
         try:
-            filepath = build_filepath(output_dir, book_name, vol["index"], vol["name"], total,
-                                      index_fmt, include_book_name, separator)
+            filepath = build_filepath(output_dir, book_name, seq_index, vol["name"], seq_total,
+                                      index_fmt, include_book_name, separator,
+                                      index_prefix=prefix)
             ok = download_volume(aid, vol["vid"], filepath, retry_count, retry_delay, skip_event)
             if ok:
                 if skip_event and skip_event.is_set():
@@ -231,14 +234,17 @@ def run_repair_all(aid: str, book_name: str, volumes: list[dict],
     success = 0
     fail_volumes: list[dict] = []
     garbled_volumes: list[dict] = []
-    pad = max(len(str(total)), 2)
 
     for i, vol in enumerate(volumes, 1):
         msg_queue.put(("progress", i, total, vol["name"]))
-        index_str = str(vol["index"]).zfill(pad)
+        seq_index = vol.get("seq_index", vol["index"])
+        seq_total = vol.get("seq_total", total)
+        prefix = "外傳" if vol.get("category") == "side" else ""
+        index_str = format_index_token(seq_index, seq_total, "padded", prefix)
         try:
-            filepath = build_filepath(output_dir, book_name, vol["index"], vol["name"], total,
-                                      index_fmt, include_book_name, separator)
+            filepath = build_filepath(output_dir, book_name, seq_index, vol["name"], seq_total,
+                                      index_fmt, include_book_name, separator,
+                                      index_prefix=prefix)
             result = repair_volume(aid, vol["vid"], filepath, retry_count, retry_delay, skip_event)
             skipped = skip_event is not None and skip_event.is_set()
             if skipped:

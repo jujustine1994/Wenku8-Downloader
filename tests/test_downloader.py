@@ -500,3 +500,34 @@ def test_run_download_all_skip_clears_event_for_next_volume(tmp_path):
     done = msgs[-1]
     assert done[1] == 1   # 第二卷成功
     assert len(done[2]) == 1   # 第一卷在 fail_volumes
+
+
+def test_run_download_all_uses_side_prefix(tmp_path):
+    """帶 category='side' 的卷，檔名要有「外傳」前綴，且編號跟 main 分開算"""
+    session = MagicMock()
+    session.get.return_value = _ok_resp()
+    volumes = [
+        {"index": 1, "name": "第一卷", "first_cid": 100, "vid": 99,
+         "category": "main", "seq_index": 1, "seq_total": 1},
+        {"index": 2, "name": "番外篇·SS", "first_cid": 200, "vid": 199,
+         "category": "side", "seq_index": 1, "seq_total": 1},
+    ]
+    q = queue.Queue()
+    with patch("src.downloader._get_session", return_value=session):
+        run_download_all("1", "書名", volumes, str(tmp_path), q)
+    main_path = os.path.join(str(tmp_path), "01 書名 第一卷.txt")
+    side_path = os.path.join(str(tmp_path), "外傳01 書名 番外篇·SS.txt")
+    assert os.path.exists(main_path)
+    assert os.path.exists(side_path)
+
+
+def test_run_download_all_backward_compatible_without_category(tmp_path):
+    """volumes 沒有 category/seq_index/seq_total 時沿用舊行為，不報錯"""
+    session = MagicMock()
+    session.get.return_value = _ok_resp()
+    volumes = [{"index": 1, "name": "第一卷", "first_cid": 100, "vid": 99}]
+    q = queue.Queue()
+    with patch("src.downloader._get_session", return_value=session):
+        run_download_all("1", "書名", volumes, str(tmp_path), q)
+    expected = os.path.join(str(tmp_path), "01 書名 第一卷.txt")
+    assert os.path.exists(expected)
