@@ -76,6 +76,24 @@ def test_build_filepath_triple_digit():
     assert "001 某書 第一卷.txt" in path
 
 
+def test_build_filepath_with_index_prefix():
+    path = build_filepath("downloads", "書名", 1, "番外篇·SS", 5,
+                          index_prefix="外傳")
+    assert path == os.path.join("downloads", "外傳01 書名 番外篇·SS.txt")
+
+
+def test_build_filepath_index_prefix_default_empty():
+    """不傳 index_prefix 時行為跟現有測試完全一致"""
+    path = build_filepath("downloads", "書名", 1, "第一卷", 10)
+    assert path == os.path.join("downloads", "01 書名 第一卷.txt")
+
+
+def test_build_filepath_index_prefix_ignored_when_none_fmt():
+    path = build_filepath("downloads", "書名", 1, "番外篇·SS", 5,
+                          index_fmt="none", index_prefix="外傳")
+    assert path == os.path.join("downloads", "書名 番外篇·SS.txt")
+
+
 def test_run_download_all_messages(tmp_path):
     session = MagicMock()
     session.get.return_value = _ok_resp()

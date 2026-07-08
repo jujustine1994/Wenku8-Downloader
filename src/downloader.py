@@ -4,6 +4,7 @@ import queue
 from curl_cffi import requests as cf_requests
 from src.config import DOWNLOAD_BASE_URL, RETRY_COUNT, RETRY_DELAY
 from src.converter import convert_to_traditional
+from src.scraper import format_index_token
 
 _session: cf_requests.Session | None = None
 
@@ -156,14 +157,13 @@ def build_filepath(output_dir: str, book_name: str, volume_index: int,
                    volume_name: str, total: int,
                    index_fmt: str = "padded",
                    include_book_name: bool = True,
-                   separator: str = " ") -> str:
-    pad = max(len(str(total)), 2)
+                   separator: str = " ",
+                   index_prefix: str = "") -> str:
     safe = lambda s: "".join(c for c in s if c not in r'\/:*?"<>|')
     parts = []
-    if index_fmt == "padded":
-        parts.append(str(volume_index).zfill(pad))
-    elif index_fmt == "plain":
-        parts.append(str(volume_index))
+    token = format_index_token(volume_index, total, index_fmt, index_prefix)
+    if token:
+        parts.append(safe(token))
     if include_book_name:
         parts.append(safe(book_name))
     parts.append(safe(volume_name))
