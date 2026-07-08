@@ -163,3 +163,10 @@ def resequence_by_category(volumes: list[dict]) -> list[dict]:
         counters[cat] = counters.get(cat, 0) + 1
         result.append({**v, "seq_index": counters[cat], "seq_total": totals[cat]})
     return result
+
+
+def assign_categories_and_sequence(volumes: list[dict], side_keywords: list[str]) -> list[dict]:
+    """便利包裝：classify_volumes() 接 resequence_by_category()。
+    Preview 視窗開啟時的預設分類/編號用這個；Preview 確認時改用 resequence_by_category()
+    （避免重跑關鍵字分類蓋掉使用者手動調整的結果）。"""
+    return resequence_by_category(classify_volumes(volumes, side_keywords))

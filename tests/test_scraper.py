@@ -7,6 +7,7 @@ from src.scraper import (
     format_index_token,
     classify_volumes,
     resequence_by_category,
+    assign_categories_and_sequence,
 )
 
 SAMPLE_HTML = """
@@ -168,3 +169,20 @@ def test_resequence_by_category_does_not_change_category():
     volumes = [{"index": 1, "name": "第一卷", "category": "main"}]
     result = resequence_by_category(volumes)
     assert result[0]["category"] == "main"
+
+
+def test_assign_categories_and_sequence_combines_both_steps():
+    volumes = [
+        {"index": 1, "name": "第一卷", "first_cid": 100, "vid": 99},
+        {"index": 2, "name": "番外篇·SS", "first_cid": 200, "vid": 199},
+        {"index": 3, "name": "第二卷", "first_cid": 300, "vid": 299},
+    ]
+    result = assign_categories_and_sequence(volumes, ["番外", "SS"])
+    assert result[0]["category"] == "main"
+    assert result[0]["seq_index"] == 1
+    assert result[0]["seq_total"] == 2
+    assert result[1]["category"] == "side"
+    assert result[1]["seq_index"] == 1
+    assert result[1]["seq_total"] == 1
+    assert result[2]["category"] == "main"
+    assert result[2]["seq_index"] == 2
