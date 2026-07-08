@@ -4,6 +4,7 @@ import inspect
 from unittest.mock import patch, MagicMock
 import pytest
 from src.downloader import download_volume, build_filepath, run_download_all, check_garbled, repair_volume, run_repair_all
+from src.scraper import assign_categories_and_sequence
 from src.config import RETRY_COUNT, RETRY_DELAY
 
 CONTENT = b"A" * 500
@@ -531,3 +532,25 @@ def test_run_download_all_backward_compatible_without_category(tmp_path):
         run_download_all("1", "書名", volumes, str(tmp_path), q)
     expected = os.path.join(str(tmp_path), "01 書名 第一卷.txt")
     assert os.path.exists(expected)
+
+
+def test_classify_to_download_end_to_end(tmp_path):
+    """整合測試：raw volumes 經 assign_categories_and_sequence 真跑一遍分類+編號，
+    再把真實輸出餵給 run_download_all，驗證檔名 main/side 編號與「外傳」前綴正確。
+    這條路徑確保 classify→resequence→filename 三段接起來不會因欄位改名而斷掉。"""
+    session = MagicMock()
+    session.get.return_value = _ok_resp()
+    raw_volumes = [
+        {"index": 1, "name": "第一卷", "first_cid": 100, "vid": 99},
+        {"index": 2, "name": "番外篇·SS", "first_cid": 200, "vid": 199},
+        {"index": 3, "name": "第二卷", "first_cid": 300, "vid": 299},
+    ]
+    # 不手工塞 category/seq_index/seq_total，全部交給真實分類函式產生
+    volumes = assign_categories_and_sequence(raw_volumes, ["番外", "SS"])
+    q = queue.Queue()
+    with patch("src.downloader._get_session", return_value=session):
+        run_download_all("1", "書名", volumes, str(tmp_path), q)
+    # main 卷：01、02；side 卷：外傳01
+    assert os.path.exists(os.path.join(str(tmp_path), "01 書名 第一卷.txt"))
+    assert os.path.exists(os.path.join(str(tmp_path), "02 書名 第二卷.txt"))
+    assert os.path.exists(os.path.join(str(tmp_path), "外傳01 書名 番外篇·SS.txt"))

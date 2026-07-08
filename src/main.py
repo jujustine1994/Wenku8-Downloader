@@ -959,7 +959,15 @@ class App:
         canvas.configure(yscrollcommand=sb.set)
         canvas.grid(row=0, column=0, sticky="nsew")
         sb.grid(row=0, column=1, sticky="ns")
-        self._enable_wheel_scroll(canvas)
+        # 這是每次載入都新建的暫時性對話框，不能用 _enable_wheel_scroll 的
+        # bind_all（那會在 App 生命週期內永久累積 handler，每開一次就多洩漏一個）。
+        # 改直接綁在對話框自己的 Toplevel 上：Tk 的事件分派會讓子元件上的
+        # <MouseWheel> 沿 bindtags 冒泡到所屬 Toplevel，所以綁在 win 上一樣收得到；
+        # 且 win.destroy() 時（_confirm / _cancel / 關窗都會呼叫）綁定會隨之銷毀，不洩漏。
+        win.bind(
+            "<MouseWheel>",
+            lambda e: canvas.yview_scroll(int(-1 * (e.delta / 120)), "units"),
+        )
 
         row_frame = ttk.Frame(canvas)
         row_win = canvas.create_window((0, 0), window=row_frame, anchor="nw")
