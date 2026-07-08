@@ -147,3 +147,19 @@ def classify_volumes(volumes: list[dict], side_keywords: list[str]) -> list[dict
         {**v, "category": classify_volume(v["name"], side_keywords)}
         for v in volumes
     ]
+
+
+def resequence_by_category(volumes: list[dict]) -> list[dict]:
+    """volumes 每個 dict 必須已有 'category' 欄位。依 category 分開計算
+    seq_index（1-based）、seq_total，回傳新 list，不修改輸入，保留原始順序。"""
+    totals: dict[str, int] = {}
+    for v in volumes:
+        totals[v["category"]] = totals.get(v["category"], 0) + 1
+
+    counters: dict[str, int] = {}
+    result = []
+    for v in volumes:
+        cat = v["category"]
+        counters[cat] = counters.get(cat, 0) + 1
+        result.append({**v, "seq_index": counters[cat], "seq_total": totals[cat]})
+    return result

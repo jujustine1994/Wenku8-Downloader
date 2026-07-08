@@ -6,6 +6,7 @@ from src.scraper import (
     parse_book_title,
     format_index_token,
     classify_volumes,
+    resequence_by_category,
 )
 
 SAMPLE_HTML = """
@@ -130,3 +131,40 @@ def test_classify_volumes_preserves_order():
     ]
     result = classify_volumes(volumes, [])
     assert [v["name"] for v in result] == ["第一卷", "第二卷"]
+
+
+def test_resequence_by_category_mixed():
+    volumes = [
+        {"index": 1, "name": "第一卷", "category": "main"},
+        {"index": 2, "name": "番外·SS", "category": "side"},
+        {"index": 3, "name": "第二卷", "category": "main"},
+    ]
+    result = resequence_by_category(volumes)
+    assert result[0]["seq_index"] == 1 and result[0]["seq_total"] == 2
+    assert result[1]["seq_index"] == 1 and result[1]["seq_total"] == 1
+    assert result[2]["seq_index"] == 2 and result[2]["seq_total"] == 2
+
+
+def test_resequence_by_category_all_same_category():
+    volumes = [
+        {"index": 1, "name": "第一卷", "category": "main"},
+        {"index": 2, "name": "第二卷", "category": "main"},
+    ]
+    result = resequence_by_category(volumes)
+    assert [v["seq_index"] for v in result] == [1, 2]
+    assert all(v["seq_total"] == 2 for v in result)
+
+
+def test_resequence_by_category_preserves_order():
+    volumes = [
+        {"index": 1, "name": "A", "category": "side"},
+        {"index": 2, "name": "B", "category": "main"},
+    ]
+    result = resequence_by_category(volumes)
+    assert [v["name"] for v in result] == ["A", "B"]
+
+
+def test_resequence_by_category_does_not_change_category():
+    volumes = [{"index": 1, "name": "第一卷", "category": "main"}]
+    result = resequence_by_category(volumes)
+    assert result[0]["category"] == "main"
