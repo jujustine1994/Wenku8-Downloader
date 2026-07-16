@@ -5,6 +5,7 @@ from curl_cffi import requests as cf_requests
 from src.config import DOWNLOAD_BASE_URL, RETRY_COUNT, RETRY_DELAY
 from src.converter import convert_to_traditional
 from src.scraper import format_index_token
+from src.logutil import _write_log, _write_log_header, _extract_status
 
 _session: cf_requests.Session | None = None
 
@@ -27,6 +28,7 @@ def _fetch_bytes(aid: str, vid: int, charset: str,
         attempt += 1
         if skip_event and skip_event.is_set():
             return None
+        resp = None
         try:
             resp = _get_session().get(url, impersonate="chrome120", timeout=30)
             resp.raise_for_status()
@@ -34,7 +36,11 @@ def _fetch_bytes(aid: str, vid: int, charset: str,
             if len(resp.content) < 50 or resp.content[:5].strip().startswith(b"<"):
                 raise ValueError("Response is HTML error page, not TXT")
             return resp.content
-        except Exception:
+        except Exception as e:
+            # 只記類型 + status code + 重試次數，絕不記 url（見 windows-tool.md「錯誤行怎麼寫」）
+            status = resp.status_code if resp is not None else _extract_status(e)
+            retry_label = "無限次" if infinite else f"{attempt}/{retry_count}"
+            _write_log(f"vid={vid} charset={charset} -> {type(e).__name__}: HTTP {status} | 重試 {retry_label}", "ERROR")
             if not infinite and attempt >= retry_count:
                 return None
             if skip_event and skip_event.is_set():
@@ -185,6 +191,10 @@ def run_download_all(aid: str, book_name: str, volumes: list[dict],
     fail_volumes: list[dict] = []
     garbled_volumes: list[dict] = []
 
+    retry_label_hdr = "無限次" if retry_count <= 0 else f"{retry_count}x"
+    task_start = time.time()
+    _write_log_header(f"下載 {book_name} | {total}卷 | retry:{retry_label_hdr}")
+
     for i, vol in enumerate(volumes, 1):
         msg_queue.put(("progress", i, total, vol["name"]))
         seq_index = vol.get("seq_index", vol["index"])
@@ -217,7 +227,18 @@ def run_download_all(aid: str, book_name: str, volumes: list[dict],
         except Exception as e:
             # 單一卷發生非預期錯誤（例如路徑無法寫入）不應讓整批下載卡死
             fail_volumes.append(vol)
+            # 只記類型 + status code，絕不記 {e} 全文 / url；書名/卷序已在任務起始行
+            status = _extract_status(e)
+            _write_log(f"{book_name} {index_str} -> {type(e).__name__}: HTTP {status}", "ERROR")
             msg_queue.put(("log", "fail", index_str, vol["name"], f"錯誤：{e}"))
+
+    elapsed = int(time.time() - task_start)
+    ok_all = not fail_volumes
+    result_text = (
+        f"成功 {success}/{total} 卷" if ok_all
+        else f"成功 {success}/{total} 卷，失敗 {len(fail_volumes)} 卷"
+    )
+    _write_log(f"{result_text}，耗時 {elapsed // 60}分{elapsed % 60}秒", "OK" if ok_all else "FAIL")
 
     msg_queue.put(("done", success, fail_volumes, garbled_volumes))
 
@@ -234,6 +255,10 @@ def run_repair_all(aid: str, book_name: str, volumes: list[dict],
     success = 0
     fail_volumes: list[dict] = []
     garbled_volumes: list[dict] = []
+
+    retry_label_hdr = "無限次" if retry_count <= 0 else f"{retry_count}x"
+    task_start = time.time()
+    _write_log_header(f"修復 {book_name} | {total}卷 | retry:{retry_label_hdr}")
 
     for i, vol in enumerate(volumes, 1):
         msg_queue.put(("progress", i, total, vol["name"]))
@@ -263,6 +288,17 @@ def run_repair_all(aid: str, book_name: str, volumes: list[dict],
         except Exception as e:
             # 單一卷發生非預期錯誤（例如路徑無法寫入）不應讓整批修復卡死
             fail_volumes.append(vol)
+            # 只記類型 + status code，絕不記 {e} 全文 / url；書名/卷序已在任務起始行
+            status = _extract_status(e)
+            _write_log(f"{book_name} {index_str} -> {type(e).__name__}: HTTP {status}", "ERROR")
             msg_queue.put(("log", "fail", index_str, vol["name"], f"錯誤：{e}"))
+
+    elapsed = int(time.time() - task_start)
+    ok_all = not fail_volumes
+    result_text = (
+        f"成功 {success}/{total} 卷" if ok_all
+        else f"成功 {success}/{total} 卷，失敗 {len(fail_volumes)} 卷"
+    )
+    _write_log(f"{result_text}，耗時 {elapsed // 60}分{elapsed % 60}秒", "OK" if ok_all else "FAIL")
 
     msg_queue.put(("done", success, fail_volumes, garbled_volumes))

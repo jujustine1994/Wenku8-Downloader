@@ -12,6 +12,7 @@ from src.scraper import (
     assign_categories_and_sequence, resequence_by_category, format_index_token,
 )
 from src.downloader import run_download_all, run_repair_all
+from src.logutil import _write_log, _extract_status
 
 # 高 DPI 感知（4K/2K 螢幕不模糊，需在 Tk() 前呼叫）
 try:
@@ -1119,7 +1120,8 @@ class App:
                 volumes = parse_volumes(soup)
                 self.msg_queue.put(("catalog_done", book_name, volumes))
             except Exception as e:
-                self.msg_queue.put(("catalog_error", str(e)))
+                # 只把類型 + status code 往下傳供落檔用，str(e) 只給畫面顯示，不落檔
+                self.msg_queue.put(("catalog_error", str(e), type(e).__name__, _extract_status(e)))
 
         threading.Thread(target=_load_worker, daemon=True).start()
 
@@ -1282,7 +1284,7 @@ class App:
                     self._open_preview_dialog(book_name, classified)
 
                 elif kind == "catalog_error":
-                    _, err = msg
+                    _, err, err_type, status = msg
                     self.progress_bar.stop()
                     self.progress_bar.config(mode="determinate")
                     self.title_label.config(text="載入失敗")
@@ -1290,8 +1292,10 @@ class App:
                     self.btn_load.config(state="normal")
                     self.btn_select_all.config(state="disabled")
                     self.btn_deselect_all.config(state="disabled")
-                    hint = "（403 錯誤：網站拒絕存取，可稍後再試）" if "403" in err else ""
+                    hint = "（403 錯誤：網站拒絕存取，可稍後再試）" if status == 403 else ""
                     self._set_status(f"載入失敗：{err}{hint}", "error")
+                    # 只記類型 + status code + 書號，絕不記 url / response 全文
+                    _write_log(f"載入目錄 aid={self._aid} -> {err_type}: HTTP {status}", "ERROR")
 
                 elif kind == "progress":
                     _, current, total, vol_name = msg
