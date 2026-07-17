@@ -32,6 +32,11 @@
 
 ## 更新記錄
 
+### 2026-07-17 — 文件修正
+- `docs/ARCHITECTURE.md`：目錄結構與檔案職責表補上 `src/logutil.py`（執行紀錄共用模組）與 `src/converter.py`（簡轉繁核心，`downloader.py` 的 `download_volume`/`repair_volume` 皆呼叫 `convert_to_traditional`）
+- `docs/ARCHITECTURE.md`：修正 queue `done` 訊息格式，從 3 元素 `("done", success_count, fail_list)` 更正為實際的 4 元素 `("done", success, fail_volumes, garbled_volumes)`
+- `.gitignore` 加入 `src/.tool_config.json`（存使用者本機輸出路徑，先前未被涵蓋，僥倖未進版控）
+
 ### 2026-07-09（v16）
 - 改版：「重試失敗」「修復亂碼」合併成單一「重試/修復」按鈕與 `_recovery_volumes` 待處理清單。`repair_volume`/`run_repair_all` 本來就是完整超集（網路重試+編碼修復都有），直接重用，`downloader.py`/`scraper.py` 不用改
 - 改善：移除「修復亂碼」原本的二次確認對話框，點「重試/修復」直接處理，不用先判斷是網路失敗還是編碼問題

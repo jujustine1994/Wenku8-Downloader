@@ -20,6 +20,8 @@ root/
     main.py                ← tkinter UI 主程式、CTH banner 入口
     scraper.py             ← 目錄頁爬取與卷列表解析
     downloader.py          ← 下載邏輯、retry、filepath 建構
+    converter.py           ← 簡轉繁核心（OpenCC）、編碼偵測
+    logutil.py             ← 執行紀錄（logs/app.log）共用模組
     config.py              ← URL 常數、retry 設定、User-Agent
 
   tests/
@@ -45,6 +47,8 @@ root/
 | `src/config.py` | 所有 URL、retry、headers 常數集中管理 |
 | `src/scraper.py` | parse_aid_from_url / fetch_catalog / parse_book_title / parse_volumes |
 | `src/downloader.py` | download_volume（retry）/ build_filepath / run_download_all（thread fn）|
+| `src/converter.py` | convert_to_traditional（簡轉繁核心，OpenCC s2twp）/ 編碼偵測，`downloader.py` 的 `download_volume`/`repair_volume` 皆呼叫 |
+| `src/logutil.py` | 執行紀錄共用模組（`logs/app.log`，main.py/downloader.py 共用同一檔案，不分割、不輪替）|
 | `src/main.py` | tkinter App、queue 輪詢、UI 事件處理 |
 | `launcher.ps1` | Python/uv 檢查、首次安裝說明、venv 建立、啟動 |
 
@@ -95,5 +99,5 @@ root/
 | `catalog_error` | `("catalog_error", error_msg)` | 目錄載入失敗 |
 | `progress` | `("progress", current, total, vol_name)` | 下載進度更新 |
 | `log` | `("log", status, index_str, vol_name, detail)` | 單卷完成或失敗 |
-| `done` | `("done", success_count, fail_list)` | 全部下載完成 |
+| `done` | `("done", success_count, fail_volumes, garbled_volumes)` | 全部下載完成 |
 | `status` | `("status", (msg, level))` | 狀態列更新（level: info/success/error）|
