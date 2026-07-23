@@ -19,8 +19,10 @@ def _get_session() -> cf_requests.Session:
 
 def _fetch_bytes(aid: str, vid: int, charset: str,
                  retry_count: int, retry_delay: float,
-                 skip_event=None) -> bytes | None:
-    """retry_count <= 0 表示無限重試，直到成功或 skip_event 被觸發。"""
+                 skip_event=None, max_attempts: int | None = None) -> bytes | None:
+    """retry_count <= 0 表示無限重試，直到成功或 skip_event 被觸發。
+    max_attempts 有設定時，即使無限重試模式也會在達到次數上限後放棄
+    （自動修復流程用來避免真的下載不到的卷讓程式無限空轉；手動操作不傳這個參數）。"""
     url = f"{DOWNLOAD_BASE_URL}?aid={aid}&vid={vid}&charset={charset}"
     infinite = retry_count <= 0
     attempt = 0
@@ -42,6 +44,8 @@ def _fetch_bytes(aid: str, vid: int, charset: str,
             retry_label = "無限次" if infinite else f"{attempt}/{retry_count}"
             _write_log(f"vid={vid} charset={charset} -> {type(e).__name__}: HTTP {status} | 重試 {retry_label}", "ERROR")
             if not infinite and attempt >= retry_count:
+                return None
+            if max_attempts is not None and attempt >= max_attempts:
                 return None
             if skip_event and skip_event.is_set():
                 return None

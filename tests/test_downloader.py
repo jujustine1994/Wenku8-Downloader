@@ -619,3 +619,36 @@ def test_scan_existing_volumes_mixed_and_naming_params(tmp_path):
                                    include_book_name=False)
     result_vids = {v["vid"] for v in result}
     assert result_vids == {2, 3}
+
+
+def test_fetch_bytes_max_attempts_gives_up_in_infinite_mode(tmp_path):
+    """retry_count<=0（無限模式）時，max_attempts 到了也要放棄回傳 None"""
+    from src.downloader import _fetch_bytes
+    session = MagicMock()
+    session.get.side_effect = Exception("network error")
+    with patch("src.downloader._get_session", return_value=session), \
+         patch("src.downloader.time.sleep"):
+        result = _fetch_bytes("1", 99, "utf-8", retry_count=0, retry_delay=0, max_attempts=3)
+    assert result is None
+    assert session.get.call_count == 3
+
+
+def test_fetch_bytes_max_attempts_none_means_unbounded(tmp_path):
+    """max_attempts 為 None（預設）時，無限模式維持原本一直重試的行為（不會被提早放棄）"""
+    from src.downloader import _fetch_bytes
+    session = MagicMock()
+    call_count = 0
+
+    def side_effect(*args, **kwargs):
+        nonlocal call_count
+        call_count += 1
+        if call_count < 10:
+            raise Exception("network error")
+        return _ok_resp()
+
+    session.get.side_effect = side_effect
+    with patch("src.downloader._get_session", return_value=session), \
+         patch("src.downloader.time.sleep"):
+        result = _fetch_bytes("1", 99, "utf-8", retry_count=0, retry_delay=0)
+    assert result == CONTENT
+    assert call_count == 10
