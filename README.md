@@ -26,8 +26,8 @@
 ## 技術棧
 
 - 語言：Python 3.10+
-- UI：tkinter + sv-ttk
-- 套件：requests, beautifulsoup4, lxml
+- UI：tkinter（原生 ttk 主題；sv-ttk 已停用，見 CHANGELOG v13）
+- 套件：curl_cffi（模擬 Chrome TLS 指紋繞過 Cloudflare）, beautifulsoup4, lxml, opencc-python-reimplemented（簡轉繁）
 
 ## .gitignore 必含項目
 

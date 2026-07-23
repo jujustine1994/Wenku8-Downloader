@@ -1,2 +1,1 @@
 pytest>=7.4.0
-requests-mock>=1.11.0
