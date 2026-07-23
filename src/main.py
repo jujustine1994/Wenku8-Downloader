@@ -126,6 +126,8 @@ class App:
         self._side_keywords: list[str] = _cfg.get("side_keywords", list(DEFAULT_SIDE_KEYWORDS))
         self._last_batch_vids: set = set()
         self._repair_mode = False
+        self._auto_repair_active = False
+        self._auto_round = 0
         self._skip_event = threading.Event()
         self._browsing = False
 
@@ -941,6 +943,8 @@ class App:
         """清空跟目前這本書相關的狀態：卷列表、待處理清單與對應按鈕。
         載入新書、或 Preview 視窗取消時共用，避免舊書的清單/按鈕狀態殘留到下一本書。"""
         self._recovery_volumes = []
+        self._auto_repair_active = False
+        self._auto_round = 0
         self._build_checkbox_list([])
         self.btn_download.config(state="disabled")
         self.btn_select_all.config(state="disabled")
@@ -1149,6 +1153,8 @@ class App:
         self.btn_deselect_all.config(state="disabled")
         self.btn_scan.config(state="disabled")
         self._repair_mode = False
+        self._auto_repair_active = False
+        self._auto_round = 0
         self._last_batch_vids = {v["vid"] for v in selected}
         self._skip_event.clear()
         self.btn_recover.config(state="disabled", text="重試/修復")
@@ -1180,6 +1186,16 @@ class App:
             return
         vols = list(self._recovery_volumes)
         self._recovery_volumes = []
+        self._auto_repair_active = False
+        self._dispatch_repair(vols, output_dir, f"重試/修復 {len(vols)} 卷")
+
+    # 有限重試模式下，自動修復整批最多跑幾輪；無限重試模式一律只跑 1 輪
+    AUTO_REPAIR_ROUND_LIMIT = 3
+    # 無限重試模式下，自動修復流程中單一編碼嘗試的次數上限
+    AUTO_REPAIR_MAX_ATTEMPTS = 50
+
+    def _dispatch_repair(self, vols, output_dir, log_label, max_attempts=None):
+        """共用的修復執行緒派工，_on_recover()（手動）與自動修復流程都呼叫這個。"""
         self._last_batch_vids = {v["vid"] for v in vols}
         self._repair_mode = True
         self._skip_event.clear()
@@ -1192,20 +1208,37 @@ class App:
         self.btn_scan.config(state="disabled")
         self.btn_skip.config(state="normal")
         self.log_text.config(state="normal")
-        self.log_text.insert("end", f"\n── 重試/修復 {len(vols)} 卷 ──\n")
+        self.log_text.insert("end", f"\n── {log_label} ──\n")
         self.log_text.see("end")
         self.log_text.config(state="disabled")
         self.progress_bar["value"] = 0
         self.progress_bar["maximum"] = len(vols)
         self._set_status(f"處理中... 共 {len(vols)} 卷", "info")
+        kwargs = {"skip_event": self._skip_event}
+        if max_attempts is not None:
+            kwargs["max_attempts"] = max_attempts
         threading.Thread(
             target=run_repair_all,
             args=(self._aid, self._book_name, vols, output_dir, self.msg_queue,
                   self._retry_count, self._retry_delay,
                   self._fname_index, self._fname_book_name, self._fname_separator),
-            kwargs={"skip_event": self._skip_event},
+            kwargs=kwargs,
             daemon=True,
         ).start()
+
+    def _start_auto_repair(self):
+        """下載完成後若有失敗/亂碼卷，自動觸發修復（不用使用者按按鈕）。"""
+        output_dir = self._ensure_output_dir()
+        if output_dir is None:
+            self._auto_repair_active = False
+            return
+        vols = list(self._recovery_volumes)
+        self._recovery_volumes = []
+        self._auto_repair_active = True
+        self._auto_round = 1
+        infinite = self._retry_count <= 0
+        max_attempts = self.AUTO_REPAIR_MAX_ATTEMPTS if infinite else None
+        self._dispatch_repair(vols, output_dir, f"自動修復 第1輪 共 {len(vols)} 卷", max_attempts)
 
     def _on_scan(self):
         if not self._volumes:
@@ -1388,6 +1421,36 @@ class App:
                         suffix = ""
                     prefix = "修復完成" if self._repair_mode else "下載完成"
                     self._set_status(f"{prefix} {success_count}/{total}{suffix}", level)
+
+                    if self._auto_repair_active:
+                        infinite = self._retry_count <= 0
+                        round_limit = 1 if infinite else self.AUTO_REPAIR_ROUND_LIMIT
+                        if recovery_count == 0:
+                            self._auto_repair_active = False
+                        elif self._auto_round >= round_limit:
+                            self._auto_repair_active = False
+                            self._set_status(
+                                f"自動處理完成，成功 {success_count}/{total} 卷，"
+                                f"{recovery_count} 卷需要你手動處理"
+                                "（可點「重試/修復」再試）",
+                                "error",
+                            )
+                        else:
+                            self._auto_round += 1
+                            auto_output_dir = self._ensure_output_dir()
+                            if auto_output_dir is None:
+                                self._auto_repair_active = False
+                            else:
+                                next_vols = list(self._recovery_volumes)
+                                self._recovery_volumes = []
+                                max_attempts = self.AUTO_REPAIR_MAX_ATTEMPTS if infinite else None
+                                self._dispatch_repair(
+                                    next_vols, auto_output_dir,
+                                    f"自動修復 第{self._auto_round}輪 共 {len(next_vols)} 卷",
+                                    max_attempts,
+                                )
+                    elif not self._repair_mode and recovery_count > 0:
+                        self._start_auto_repair()
 
                 elif kind == "conv_log":
                     _, ok, filename, detail = msg
