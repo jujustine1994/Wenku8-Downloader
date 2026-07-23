@@ -69,9 +69,9 @@ def _decode_response(raw: bytes, charset_hint: str) -> str:
 
 def _fetch_best_text(aid: str, vid: int,
                      retry_count: int, retry_delay: float,
-                     skip_event=None) -> str | None:
+                     skip_event=None, max_attempts: int | None = None) -> str | None:
     """先抓 UTF-8，若含亂碼字元就自動改抓 GBK 版本並取亂碼較少者。"""
-    utf8_bytes = _fetch_bytes(aid, vid, "utf-8", retry_count, retry_delay, skip_event)
+    utf8_bytes = _fetch_bytes(aid, vid, "utf-8", retry_count, retry_delay, skip_event, max_attempts)
     if utf8_bytes is None:
         return None
     utf8_text = _decode_response(utf8_bytes, "utf-8")
@@ -79,7 +79,7 @@ def _fetch_best_text(aid: str, vid: int,
     if "�" not in utf8_text or (skip_event and skip_event.is_set()):
         return utf8_text
 
-    gbk_bytes = _fetch_bytes(aid, vid, "gbk", retry_count, retry_delay, skip_event)
+    gbk_bytes = _fetch_bytes(aid, vid, "gbk", retry_count, retry_delay, skip_event, max_attempts)
     if gbk_bytes is not None:
         gbk_text = _decode_response(gbk_bytes, "gbk")
         if gbk_text.count("�") < utf8_text.count("�"):
@@ -117,7 +117,7 @@ REPAIR_STALE_LIMIT = 5  # 連續幾輪沒有改善才放棄（避免真的修不
 def repair_volume(aid: str, vid: int, filepath: str,
                   retry_count: int = RETRY_COUNT,
                   retry_delay: float = RETRY_DELAY,
-                  skip_event=None) -> bool | None:
+                  skip_event=None, max_attempts: int | None = None) -> bool | None:
     """
     重複整輪重新下載（utf-8 + gbk 挑亂碼較少者），直到完全無亂碼、或
     skip_event 被觸發才停止。retry_count 為正數（有限重試）時，額外會在
@@ -136,7 +136,7 @@ def repair_volume(aid: str, vid: int, filepath: str,
     while True:
         if skip_event and skip_event.is_set():
             break
-        text = _fetch_best_text(aid, vid, retry_count, retry_delay, skip_event)
+        text = _fetch_best_text(aid, vid, retry_count, retry_delay, skip_event, max_attempts)
         if text is not None:
             count = text.count("�")
             if best_count is None or count < best_count:
@@ -151,7 +151,7 @@ def repair_volume(aid: str, vid: int, filepath: str,
 
         if skip_event and skip_event.is_set():
             break
-        if not infinite and stale_rounds >= REPAIR_STALE_LIMIT:
+        if (not infinite or max_attempts is not None) and stale_rounds >= REPAIR_STALE_LIMIT:
             break
         time.sleep(retry_delay)
 
@@ -276,7 +276,7 @@ def run_repair_all(aid: str, book_name: str, volumes: list[dict],
                    index_fmt: str = "padded",
                    include_book_name: bool = True,
                    separator: str = " ",
-                   skip_event=None) -> None:
+                   skip_event=None, max_attempts: int | None = None) -> None:
     total = len(volumes)
     success = 0
     fail_volumes: list[dict] = []
@@ -296,7 +296,8 @@ def run_repair_all(aid: str, book_name: str, volumes: list[dict],
             filepath = build_filepath(output_dir, book_name, seq_index, vol["name"], seq_total,
                                       index_fmt, include_book_name, separator,
                                       index_prefix=prefix)
-            result = repair_volume(aid, vol["vid"], filepath, retry_count, retry_delay, skip_event)
+            result = repair_volume(aid, vol["vid"], filepath, retry_count, retry_delay,
+                                   skip_event, max_attempts)
             skipped = skip_event is not None and skip_event.is_set()
             if skipped:
                 skip_event.clear()

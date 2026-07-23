@@ -652,3 +652,35 @@ def test_fetch_bytes_max_attempts_none_means_unbounded(tmp_path):
         result = _fetch_bytes("1", 99, "utf-8", retry_count=0, retry_delay=0)
     assert result == CONTENT
     assert call_count == 10
+
+
+def test_repair_volume_infinite_mode_gives_up_with_max_attempts(tmp_path):
+    """無限重試模式 + max_attempts 設定時，repair_volume 的外層停滯偵測要生效，不會無限迴圈"""
+    session = MagicMock()
+    session.get.side_effect = Exception("network error")
+    fp = str(tmp_path / "書名" / "vol.txt")
+    os.makedirs(os.path.dirname(fp), exist_ok=True)
+
+    with patch("src.downloader._get_session", return_value=session), \
+         patch("src.downloader.time.sleep"):
+        result = repair_volume("1", 99, fp, retry_count=0, retry_delay=0, max_attempts=2)
+
+    assert result is None  # 從未成功取得任何內容
+
+
+def test_repair_volume_infinite_mode_without_max_attempts_unaffected():
+    """max_attempts 為 None（預設）時，無限重試模式的函式簽名/預設值不受影響"""
+    sig = inspect.signature(repair_volume)
+    assert sig.parameters["max_attempts"].default is None
+
+
+def test_run_repair_all_passes_max_attempts_through(tmp_path):
+    """run_repair_all 收到的 max_attempts 會原封不動傳給每一卷的 repair_volume 呼叫"""
+    vol = {"index": 1, "name": "第一卷", "first_cid": 100, "vid": 99}
+    q = queue.Queue()
+    with patch("src.downloader.repair_volume", return_value=False) as mock_repair:
+        run_repair_all("1", "書名", [vol], str(tmp_path), q, max_attempts=50)
+    _, kwargs = mock_repair.call_args
+    assert mock_repair.call_args[0][3:5] == (RETRY_COUNT, RETRY_DELAY)
+    assert mock_repair.call_args.kwargs.get("max_attempts") == 50 or \
+           (len(mock_repair.call_args[0]) > 5 and mock_repair.call_args[0][-1] == 50)
