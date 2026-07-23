@@ -3,7 +3,7 @@ import queue
 import inspect
 from unittest.mock import patch, MagicMock
 import pytest
-from src.downloader import download_volume, build_filepath, run_download_all, check_garbled, repair_volume, run_repair_all
+from src.downloader import download_volume, build_filepath, run_download_all, check_garbled, repair_volume, run_repair_all, scan_existing_volumes
 from src.scraper import assign_categories_and_sequence
 from src.config import RETRY_COUNT, RETRY_DELAY
 
@@ -561,3 +561,61 @@ def test_check_garbled_non_utf8_file_treated_as_garbled(tmp_path):
     fp = tmp_path / "bad_encoding.txt"
     fp.write_bytes(b"\xff\xfe\x00\xd8")  # 不是合法 UTF-8 bytes
     assert check_garbled(str(fp)) is True
+
+
+def test_scan_existing_volumes_detects_missing_file(tmp_path):
+    """卷對應的檔案不存在 → 列入待修復清單"""
+    volumes = [{"index": 1, "name": "第一卷", "vid": 99,
+                "category": "main", "seq_index": 1, "seq_total": 1}]
+    result = scan_existing_volumes(volumes, str(tmp_path), "書名")
+    assert result == volumes
+
+
+def test_scan_existing_volumes_detects_garbled_file(tmp_path):
+    """檔案存在但含亂碼 → 列入待修復清單"""
+    volumes = [{"index": 1, "name": "第一卷", "vid": 99,
+                "category": "main", "seq_index": 1, "seq_total": 1}]
+    fp = build_filepath(str(tmp_path), "書名", 1, "第一卷", 1)
+    with open(fp, "w", encoding="utf-8") as f:
+        f.write("正常內容�亂碼")
+    result = scan_existing_volumes(volumes, str(tmp_path), "書名")
+    assert result == volumes
+
+
+def test_scan_existing_volumes_skips_clean_file(tmp_path):
+    """檔案存在且正常 → 不列入"""
+    volumes = [{"index": 1, "name": "第一卷", "vid": 99,
+                "category": "main", "seq_index": 1, "seq_total": 1}]
+    fp = build_filepath(str(tmp_path), "書名", 1, "第一卷", 1)
+    with open(fp, "w", encoding="utf-8") as f:
+        f.write("這是正常的繁體中文內容")
+    result = scan_existing_volumes(volumes, str(tmp_path), "書名")
+    assert result == []
+
+
+def test_scan_existing_volumes_mixed_and_naming_params(tmp_path):
+    """多卷混合情況：正常/亂碼/缺檔都正確分類，且命名參數會影響比對到的檔名"""
+    volumes = [
+        {"index": 1, "name": "第一卷", "vid": 1,
+         "category": "main", "seq_index": 1, "seq_total": 3},
+        {"index": 2, "name": "第二卷", "vid": 2,
+         "category": "main", "seq_index": 2, "seq_total": 3},
+        {"index": 3, "name": "番外篇", "vid": 3,
+         "category": "side", "seq_index": 1, "seq_total": 1},
+    ]
+    # 卷1：正常檔案（要用 include_book_name=False 才對得上實際檔名）
+    fp1 = build_filepath(str(tmp_path), "書名", 1, "第一卷", 3,
+                         include_book_name=False)
+    with open(fp1, "w", encoding="utf-8") as f:
+        f.write("正常內容")
+    # 卷2：不建立檔案 → 缺檔
+    # 卷3（外傳）：建立但含亂碼
+    fp3 = build_filepath(str(tmp_path), "書名", 1, "番外篇", 1,
+                         include_book_name=False, index_prefix="外傳")
+    with open(fp3, "w", encoding="utf-8") as f:
+        f.write("內容�亂碼")
+
+    result = scan_existing_volumes(volumes, str(tmp_path), "書名",
+                                   include_book_name=False)
+    result_vids = {v["vid"] for v in result}
+    assert result_vids == {2, 3}

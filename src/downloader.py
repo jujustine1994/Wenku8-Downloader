@@ -181,6 +181,25 @@ def build_filepath(output_dir: str, book_name: str, volume_index: int,
     return os.path.join(output_dir, filename)
 
 
+def scan_existing_volumes(volumes: list[dict], output_dir: str, book_name: str,
+                          index_fmt: str = "padded",
+                          include_book_name: bool = True,
+                          separator: str = " ") -> list[dict]:
+    """比對卷列表與資料夾實際檔案，回傳缺檔或含亂碼的卷清單。純檢查，不發網路請求。"""
+    total = len(volumes)
+    missing_or_garbled = []
+    for vol in volumes:
+        seq_index = vol.get("seq_index", vol["index"])
+        seq_total = vol.get("seq_total", total)
+        prefix = "外傳" if vol.get("category") == "side" else ""
+        filepath = build_filepath(output_dir, book_name, seq_index, vol["name"], seq_total,
+                                  index_fmt, include_book_name, separator,
+                                  index_prefix=prefix)
+        if not os.path.isfile(filepath) or check_garbled(filepath):
+            missing_or_garbled.append(vol)
+    return missing_or_garbled
+
+
 def run_download_all(aid: str, book_name: str, volumes: list[dict],
                      output_dir: str, msg_queue: queue.Queue,
                      retry_count: int = RETRY_COUNT,
