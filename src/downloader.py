@@ -100,8 +100,11 @@ def download_volume(aid: str, vid: int, filepath: str,
 
 
 def check_garbled(filepath: str) -> bool:
-    with open(filepath, encoding="utf-8") as f:
-        return "�" in f.read()
+    try:
+        with open(filepath, encoding="utf-8") as f:
+            return "�" in f.read()
+    except (UnicodeDecodeError, OSError):
+        return True
 
 
 REPAIR_STALE_LIMIT = 5  # 連續幾輪沒有改善才放棄（避免真的修不好時無限卡住）

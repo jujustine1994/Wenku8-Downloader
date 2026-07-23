@@ -554,3 +554,10 @@ def test_classify_to_download_end_to_end(tmp_path):
     assert os.path.exists(os.path.join(str(tmp_path), "01 書名 第一卷.txt"))
     assert os.path.exists(os.path.join(str(tmp_path), "02 書名 第二卷.txt"))
     assert os.path.exists(os.path.join(str(tmp_path), "外傳01 書名 番外篇·SS.txt"))
+
+
+def test_check_garbled_non_utf8_file_treated_as_garbled(tmp_path):
+    """既有檔案若不是合法 UTF-8（例如舊版程式殘留），視為需要修復而非拋例外"""
+    fp = tmp_path / "bad_encoding.txt"
+    fp.write_bytes(b"\xff\xfe\x00\xd8")  # 不是合法 UTF-8 bytes
+    assert check_garbled(str(fp)) is True
