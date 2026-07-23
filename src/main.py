@@ -11,7 +11,7 @@ from src.scraper import (
     parse_aid_from_url, fetch_catalog, parse_book_title, parse_volumes,
     assign_categories_and_sequence, resequence_by_category, format_index_token,
 )
-from src.downloader import run_download_all, run_repair_all
+from src.downloader import run_download_all, run_repair_all, scan_existing_volumes
 from src.logutil import _write_log, _extract_status
 
 # 高 DPI 感知（4K/2K 螢幕不模糊，需在 Tk() 前呼叫）
@@ -243,6 +243,10 @@ class App:
             btn_row, text="重試/修復", command=self._on_recover, width=10, state="disabled"
         )
         self.btn_recover.pack(side="right", ipady=4, padx=(0, 6))
+        self.btn_scan = ttk.Button(
+            btn_row, text="掃描既有檔案", command=self._on_scan, width=12, state="disabled"
+        )
+        self.btn_scan.pack(side="right", ipady=4, padx=(0, 6))
         self.btn_manage = ttk.Button(
             btn_row, text="管理", command=self._manage_recovery_dialog, width=5, state="disabled"
         )
@@ -943,6 +947,7 @@ class App:
         self.btn_deselect_all.config(state="disabled")
         self.btn_recover.config(state="disabled", text="重試/修復")
         self.btn_manage.config(state="disabled")
+        self.btn_scan.config(state="disabled")
 
     def _open_preview_dialog(self, book_name: str, volumes: list[dict]):
         win = tk.Toplevel(self.root)
@@ -1048,6 +1053,7 @@ class App:
             self.btn_download.config(state="normal")
             self.btn_select_all.config(state="normal")
             self.btn_deselect_all.config(state="normal")
+            self.btn_scan.config(state="normal")
             self._set_status(
                 f"已載入：{book_name}，共 {len(final_volumes)} 卷", "success"
             )
@@ -1141,6 +1147,7 @@ class App:
         self.btn_load.config(state="disabled")
         self.btn_select_all.config(state="disabled")
         self.btn_deselect_all.config(state="disabled")
+        self.btn_scan.config(state="disabled")
         self._repair_mode = False
         self._last_batch_vids = {v["vid"] for v in selected}
         self._skip_event.clear()
@@ -1182,6 +1189,7 @@ class App:
         self.btn_load.config(state="disabled")
         self.btn_select_all.config(state="disabled")
         self.btn_deselect_all.config(state="disabled")
+        self.btn_scan.config(state="disabled")
         self.btn_skip.config(state="normal")
         self.log_text.config(state="normal")
         self.log_text.insert("end", f"\n── 重試/修復 {len(vols)} 卷 ──\n")
@@ -1198,6 +1206,27 @@ class App:
             kwargs={"skip_event": self._skip_event},
             daemon=True,
         ).start()
+
+    def _on_scan(self):
+        if not self._volumes:
+            return
+        output_dir = self._ensure_output_dir()
+        if output_dir is None:
+            return
+        found = scan_existing_volumes(
+            self._volumes, output_dir, self._book_name,
+            self._fname_index, self._fname_book_name, self._fname_separator,
+        )
+        existing_vids = {v["vid"] for v in self._recovery_volumes}
+        self._recovery_volumes += [v for v in found if v["vid"] not in existing_vids]
+        n = len(self._recovery_volumes)
+        if n:
+            self.btn_recover.config(state="normal", text=f"重試/修復 {n} 卷")
+            self.btn_manage.config(state="normal")
+        if found:
+            self._set_status(f"掃描完成，發現 {len(found)} 卷缺檔/亂碼", "info")
+        else:
+            self._set_status("掃描完成，沒有發現問題", "success")
 
     def _on_skip(self):
         self._skip_event.set()
@@ -1334,6 +1363,7 @@ class App:
                     self.btn_download.config(state="normal")
                     self.btn_select_all.config(state="normal")
                     self.btn_deselect_all.config(state="normal")
+                    self.btn_scan.config(state="normal")
                     self.btn_skip.config(state="disabled")
                     if recovery_count:
                         self.btn_recover.config(
