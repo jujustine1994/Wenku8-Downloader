@@ -17,6 +17,8 @@ from src.scraper import (
 )
 from src.downloader import run_download_all, run_repair_all, scan_existing_volumes
 from src.logutil import _write_log, _extract_status
+from src.logtext import log_t
+from src.sitedata import DEFAULT_SIDE_KEYWORDS, SIDE_INDEX_PREFIX
 
 # 高 DPI 感知（4K/2K 螢幕不模糊，需在 Tk() 前呼叫）
 try:
@@ -68,12 +70,6 @@ FM = ("Consolas", 12)
 FH = ("Microsoft JhengHei", 10)
 
 URL_PLACEHOLDER = "https://www.wenku8.net/modules/article/reader.php?aid=XXXX"
-
-DEFAULT_SIDE_KEYWORDS = [
-    "外傳", "番外", "特典", "SS", "EX", "Extra", "Side Story",
-    "幕間", "插話", "間章", "附錄", "後記", "後日談", "後日譚",
-    "特別篇", "短篇", "短篇集", "Epilogue",
-]
 
 THEMES = {
     "light": {
@@ -1029,7 +1025,9 @@ class App:
             self._check_vars.append(var)
             seq_index = v.get("seq_index", v["index"])
             seq_total = v.get("seq_total", len(volumes))
-            prefix = "外傳" if v.get("category") == "side" else ""
+            # 這個標籤刻意跟檔名用同一個前綴／編號組法，讓使用者在清單上看到的
+            # 就是待會兒存出來的檔名開頭。所以它是資料，不翻譯。
+            prefix = SIDE_INDEX_PREFIX if v.get("category") == "side" else ""
             label = format_index_token(seq_index, seq_total, "padded", prefix)
             cb = ttk.Checkbutton(
                 self._cb_frame,
@@ -1457,7 +1455,8 @@ class App:
                     hint = "（403 錯誤：網站拒絕存取，可稍後再試）" if status == 403 else ""
                     self._set_status(f"載入失敗：{err}{hint}", "error")
                     # 只記類型 + status code + 書號，絕不記 url / response 全文
-                    _write_log(f"載入目錄 aid={self._aid} -> {err_type}: HTTP {status}", "ERROR")
+                    _write_log(log_t("err.catalog", aid=self._aid,
+                                     etype=err_type, status=status), "ERROR")
 
                 elif kind == "progress":
                     _, current, total, vol_name = msg
