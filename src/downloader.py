@@ -8,6 +8,7 @@ from src.scraper import format_index_token
 from src.logutil import _write_log, _write_log_header, _extract_status
 from src.logtext import log_t
 from src.sitedata import SIDE_INDEX_PREFIX
+from src.i18n import t
 
 _session: cf_requests.Session | None = None
 
@@ -245,7 +246,8 @@ def run_download_all(aid: str, book_name: str, volumes: list[dict],
                 success += 1
                 if check_garbled(filepath):
                     garbled_volumes.append(vol)
-                    msg_queue.put(("log", "warn", index_str, vol["name"], "偵測到亂碼"))
+                    msg_queue.put(("log", "warn", index_str, vol["name"],
+                                   t("dl.detail.garbled")))
                 else:
                     msg_queue.put(("log", "ok", index_str, vol["name"], ""))
             else:
@@ -253,10 +255,13 @@ def run_download_all(aid: str, book_name: str, volumes: list[dict],
                 fail_volumes.append(vol)
                 if skipped:
                     skip_event.clear()
-                    msg_queue.put(("log", "skip", index_str, vol["name"], "已跳過"))
+                    msg_queue.put(("log", "skip", index_str, vol["name"],
+                                   t("dl.detail.skipped")))
                 else:
-                    retry_label = "無限次" if retry_count <= 0 else f"{retry_count}x"
-                    msg_queue.put(("log", "fail", index_str, vol["name"], f"retry {retry_label} 失敗"))
+                    retry_label = (t("dl.retry.infinite") if retry_count <= 0
+                                   else f"{retry_count}x")
+                    msg_queue.put(("log", "fail", index_str, vol["name"],
+                                   t("dl.detail.retry_failed", retry=retry_label)))
         except Exception as e:
             # 單一卷發生非預期錯誤（例如路徑無法寫入）不應讓整批下載卡死
             fail_volumes.append(vol)
@@ -264,7 +269,8 @@ def run_download_all(aid: str, book_name: str, volumes: list[dict],
             status = _extract_status(e)
             _write_log(log_t("err.volume", book=book_name, index=index_str,
                              etype=type(e).__name__, status=status), "ERROR")
-            msg_queue.put(("log", "fail", index_str, vol["name"], f"錯誤：{e}"))
+            msg_queue.put(("log", "fail", index_str, vol["name"],
+                           t("dl.detail.error", err=e)))
 
     elapsed = int(time.time() - task_start)
     ok_all = not fail_volumes
@@ -315,16 +321,20 @@ def run_repair_all(aid: str, book_name: str, volumes: list[dict],
             if skipped:
                 skip_event.clear()
                 garbled_volumes.append(vol)
-                msg_queue.put(("log", "skip", index_str, vol["name"], "已跳過"))
+                msg_queue.put(("log", "skip", index_str, vol["name"],
+                               t("dl.detail.skipped")))
             elif result is None:
                 fail_volumes.append(vol)
-                msg_queue.put(("log", "fail", index_str, vol["name"], "修復失敗"))
+                msg_queue.put(("log", "fail", index_str, vol["name"],
+                               t("dl.detail.repair_failed")))
             elif result is True:
                 garbled_volumes.append(vol)
-                msg_queue.put(("log", "warn", index_str, vol["name"], "修復後仍有亂碼"))
+                msg_queue.put(("log", "warn", index_str, vol["name"],
+                               t("dl.detail.still_garbled")))
             else:
                 success += 1
-                msg_queue.put(("log", "ok", index_str, vol["name"], "已修復"))
+                msg_queue.put(("log", "ok", index_str, vol["name"],
+                               t("dl.detail.repaired")))
         except Exception as e:
             # 單一卷發生非預期錯誤（例如路徑無法寫入）不應讓整批修復卡死
             fail_volumes.append(vol)
@@ -332,7 +342,8 @@ def run_repair_all(aid: str, book_name: str, volumes: list[dict],
             status = _extract_status(e)
             _write_log(log_t("err.volume", book=book_name, index=index_str,
                              etype=type(e).__name__, status=status), "ERROR")
-            msg_queue.put(("log", "fail", index_str, vol["name"], f"錯誤：{e}"))
+            msg_queue.put(("log", "fail", index_str, vol["name"],
+                           t("dl.detail.error", err=e)))
 
     elapsed = int(time.time() - task_start)
     ok_all = not fail_volumes

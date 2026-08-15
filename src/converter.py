@@ -3,6 +3,8 @@ import queue
 
 from opencc import OpenCC
 
+from src.i18n import t
+
 _cc = OpenCC("s2twp")
 
 _FALLBACK_ENCODINGS = (("utf-8", "utf-8"), ("gbk", "GBK"), ("big5", "Big5"))
@@ -59,7 +61,9 @@ def run_convert_all(
             with open(out_path, "w", encoding="utf-8") as f:
                 f.write(converted)
             success += 1
-            detail = "" if enc_label == "utf-8" else f"偵測為 {enc_label} 編碼，已修正"
+            # enc_label 是編碼名稱（資料，不翻）；外面那句話才是介面文字
+            detail = ("" if enc_label == "utf-8"
+                      else t("conv.detail.encoding_fixed", enc=enc_label))
             msg_queue.put(("conv_log", True, os.path.basename(filepath), detail))
         except Exception as e:
             fail += 1
