@@ -495,11 +495,11 @@ class App:
     USE_SV_TTK = False
 
     def _apply_theme(self, theme_key: str):
-        t = THEMES.get(theme_key, THEMES["light"])
+        theme = THEMES.get(theme_key, THEMES["light"])
         if self.USE_SV_TTK:
             try:
                 import sv_ttk
-                sv_ttk.set_theme(t["sv"])
+                sv_ttk.set_theme(theme["sv"])
             except ImportError:
                 pass
 
@@ -512,16 +512,18 @@ class App:
         style.configure("TEntry", font=F)
         style.configure("TCombobox", font=F)
         style.configure("TNotebook.Tab", font=FB, padding=(20, 10))
-        style.configure("TLabelframe.Label", font=F, foreground=t["frame_title"])
-        label_fg = t["label_fg"]
+        style.configure("TLabelframe.Label", font=F, foreground=theme["frame_title"])
+        label_fg = theme["label_fg"]
         for w in ("TLabel", "TCheckbutton", "TRadiobutton"):
             kw = {"font": F}
             if label_fg:
                 kw["foreground"] = label_fg
             style.configure(w, **kw)
 
-        self.log_text.config(bg=t["log_bg"], fg=t["log_fg"], insertbackground=t["log_fg"])
-        self._conv_log.config(bg=t["log_bg"], fg=t["log_fg"], insertbackground=t["log_fg"])
+        self.log_text.config(bg=theme["log_bg"], fg=theme["log_fg"],
+                             insertbackground=theme["log_fg"])
+        self._conv_log.config(bg=theme["log_bg"], fg=theme["log_fg"],
+                              insertbackground=theme["log_fg"])
         self._current_theme = theme_key
 
     # ---- 設定 tab ----
@@ -756,32 +758,36 @@ class App:
         ttk.Label(right, text="預覽", foreground="gray").pack(pady=(4, 0))
 
         def draw_preview(key):
-            t = THEMES.get(key, THEMES["light"])
+            theme = THEMES.get(key, THEMES["light"])
             c = preview
             c.delete("all")
             v = lambda n: round(n * S)
             fs = round(7 * S)
-            c.create_rectangle(0, 0, PW, PH, fill=t["win_bg"], outline="")
-            tbar_bg = t["card_bg"] if t["sv"] == "light" else "#2D2D2D"
+            c.create_rectangle(0, 0, PW, PH, fill=theme["win_bg"], outline="")
+            tbar_bg = theme["card_bg"] if theme["sv"] == "light" else "#2D2D2D"
             c.create_rectangle(0, 0, PW, v(22), fill=tbar_bg, outline="")
             c.create_text(v(10), v(11), text="Wenku8 Downloader", anchor="w",
-                          fill=t["frame_title"], font=("Microsoft JhengHei", fs, "bold"))
-            c.create_rectangle(v(8), v(28), PW - v(8), v(68), fill=t["card_bg"], outline=t["border"])
+                          fill=theme["frame_title"], font=("Microsoft JhengHei", fs, "bold"))
+            c.create_rectangle(v(8), v(28), PW - v(8), v(68),
+                               fill=theme["card_bg"], outline=theme["border"])
             c.create_text(v(16), v(33), text=" 書籍目錄網址 ", anchor="w",
-                          fill=t["frame_title"], font=("Microsoft JhengHei", fs, "bold"))
-            c.create_rectangle(v(16), v(44), PW - v(16), v(58), fill=t["log_bg"], outline=t["border"])
+                          fill=theme["frame_title"], font=("Microsoft JhengHei", fs, "bold"))
+            c.create_rectangle(v(16), v(44), PW - v(16), v(58),
+                               fill=theme["log_bg"], outline=theme["border"])
             bx1, bx2 = v(65), v(145)
-            c.create_rectangle(bx1, v(74), bx2, v(88), fill=t["btn_bg"], outline="")
+            c.create_rectangle(bx1, v(74), bx2, v(88), fill=theme["btn_bg"], outline="")
             c.create_text((bx1 + bx2) / 2, v(81), text="下載全部",
-                          fill=t["btn_fg"], font=("Microsoft JhengHei", fs))
-            c.create_rectangle(v(8), v(94), PW - v(8), PH - v(6), fill=t["card_bg"], outline=t["border"])
+                          fill=theme["btn_fg"], font=("Microsoft JhengHei", fs))
+            c.create_rectangle(v(8), v(94), PW - v(8), PH - v(6),
+                               fill=theme["card_bg"], outline=theme["border"])
             c.create_text(v(16), v(99), text=" 進度 ", anchor="w",
-                          fill=t["frame_title"], font=("Microsoft JhengHei", fs, "bold"))
-            bar_bg = "#E5E5E5" if t["sv"] == "light" else "#3A3A3A"
+                          fill=theme["frame_title"], font=("Microsoft JhengHei", fs, "bold"))
+            bar_bg = "#E5E5E5" if theme["sv"] == "light" else "#3A3A3A"
             c.create_rectangle(v(16), v(110), PW - v(16), v(116), fill=bar_bg, outline="")
-            c.create_rectangle(v(16), v(110), v(70), v(116), fill=t["pbar"], outline="")
-            c.create_rectangle(v(16), v(122), PW - v(16), PH - v(12), fill=t["log_bg"], outline=t["border"])
-            c.create_text(v(20), v(128), text="等待中...", anchor="nw", fill=t["log_fg"],
+            c.create_rectangle(v(16), v(110), v(70), v(116), fill=theme["pbar"], outline="")
+            c.create_rectangle(v(16), v(122), PW - v(16), PH - v(12),
+                               fill=theme["log_bg"], outline=theme["border"])
+            c.create_text(v(20), v(128), text="等待中...", anchor="nw", fill=theme["log_fg"],
                           font=("Microsoft JhengHei", fs))
 
         theme_var.trace_add("write", lambda *_: draw_preview(theme_var.get()))
