@@ -48,43 +48,15 @@ Write-Host "[INFO] Starting Wenku8 Downloader..." -ForegroundColor Green
 Write-Host ""
 
 # ======================================
-# [1/3] 檢查 Python
+# [1/2] 檢查 uv
+#
+# ⚠ 只檢查 uv，不檢查系統 Python——uv 自己就會下載 Python（地雷十二）。
 # ======================================
-Write-Host "[1/3] 檢查 Python 環境..." -ForegroundColor Cyan
-if (-not (Get-Command python -ErrorAction SilentlyContinue)) {
-    Write-Log "未偵測到 Python，準備安裝" "WARN"
-    Write-Host "[WARNING] 未偵測到 Python，本程式需要 Python 才能執行。" -ForegroundColor Yellow
-    $ans = Read-Host "是否要立即安裝 Python？[Y/n] - 直接按 Enter 代表同意"
-    if ($ans -eq "" -or $ans -ieq "Y") {
-        if (Get-Command winget -ErrorAction SilentlyContinue) {
-            Write-Host "[INFO] 透過 winget 安裝 Python，請稍候..." -ForegroundColor Gray
-            winget install --id Python.Python.3 -e --silent --accept-source-agreements --accept-package-agreements
-        } else {
-            Write-Log "找不到 winget，無法自動安裝 Python" "ERROR"
-            Write-Host "[ERROR] 找不到 winget，請手動至 https://www.python.org/ 下載安裝後重新執行。" -ForegroundColor Red
-            Read-Host "按 Enter 關閉"; exit 1
-        }
-        $env:PATH = [System.Environment]::GetEnvironmentVariable("PATH", "Machine") + ";" + [System.Environment]::GetEnvironmentVariable("PATH", "User")
-        if (-not (Get-Command python -ErrorAction SilentlyContinue)) {
-            Write-Host "[INFO] 安裝完成，請關閉視窗後重新點兩下啟動檔。" -ForegroundColor Yellow
-            Read-Host "按 Enter 關閉"; exit 0
-        }
-        Write-Host "[OK] Python 安裝完成。" -ForegroundColor Green
-    } else {
-        Write-Host "已取消。" -ForegroundColor Gray; Read-Host "按 Enter 關閉"; exit 1
-    }
-} else {
-    $pyVer = python --version 2>&1
-    Write-Host "[OK] $pyVer 已安裝。" -ForegroundColor Green
-}
-
-# ======================================
-# [2/3] 檢查 uv
-# ======================================
-Write-Host "[2/3] 檢查 uv 套件管理工具..." -ForegroundColor Cyan
+Write-Host "[1/2] 檢查 uv 套件管理工具..." -ForegroundColor Cyan
 if (-not (Get-Command uv -ErrorAction SilentlyContinue)) {
     Write-Log "找不到 uv，準備安裝" "WARN"
     Write-Host "[WARNING] 找不到 uv，正在安裝..." -ForegroundColor Yellow
+    try { [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12 } catch {}
     Invoke-RestMethod https://astral.sh/uv/install.ps1 | Invoke-Expression
     $env:PATH = [System.Environment]::GetEnvironmentVariable("PATH", "User") + ";" + $env:PATH
     if (-not (Get-Command uv -ErrorAction SilentlyContinue)) {
@@ -92,6 +64,7 @@ if (-not (Get-Command uv -ErrorAction SilentlyContinue)) {
         Write-Host "[ERROR] uv 安裝失敗，請關閉視窗後重新點兩下啟動檔再試。" -ForegroundColor Red
         Read-Host "按 Enter 關閉"; exit 1
     }
+    $uvVer = uv --version
     Write-Host "[OK] uv 安裝完成。" -ForegroundColor Green
 } else {
     $uvVer = uv --version
@@ -99,9 +72,9 @@ if (-not (Get-Command uv -ErrorAction SilentlyContinue)) {
 }
 
 # ======================================
-# [3/3] 檢查虛擬環境
+# [2/2] 檢查虛擬環境
 # ======================================
-Write-Host "[3/3] 檢查虛擬環境..." -ForegroundColor Cyan
+Write-Host "[2/2] 檢查虛擬環境..." -ForegroundColor Cyan
 if (-not (Test-Path "venv")) {
     Write-Host ""
     Write-Host "  ============================================" -ForegroundColor Cyan
@@ -129,8 +102,13 @@ if (-not (Test-Path "venv")) {
     Write-Host ""
     $ans = Read-Host "[WARNING] 找不到虛擬環境，現在建立並安裝套件？[Y/n] - 直接按 Enter 代表同意"
     if ($ans -eq "" -or $ans -ieq "Y") {
-        Write-Host "[INFO] 建立虛擬環境中..." -ForegroundColor Gray
-        uv venv venv
+        Write-Host "[INFO] 建立虛擬環境中（電腦若沒有 Python 會自動下載，約 20MB）..." -ForegroundColor Gray
+        uv venv venv --python 3.13
+        if ($LASTEXITCODE -ne 0) {
+            Write-Log "建立虛擬環境失敗（uv venv 回傳 $LASTEXITCODE）" "ERROR"
+            Write-Host "[ERROR] 建立虛擬環境失敗，多半是下載 Python 時連不上網路。請確認網路連線後重新執行。" -ForegroundColor Red
+            Read-Host "按 Enter 關閉"; exit 1
+        }
         Write-Host "[INFO] 安裝套件中..." -ForegroundColor Gray
         uv pip install -r requirements.txt --python venv\Scripts\python.exe
         if ($LASTEXITCODE -ne 0) {
@@ -157,6 +135,7 @@ if (-not (Test-Path "venv")) {
 
 . ".\venv\Scripts\Activate.ps1"
 
+$pyVer = (& ".\venv\Scripts\python.exe" --version 2>&1 | Out-String).Trim()
 Write-Log "環境就緒 | $pyVer | $uvVer"
 
 Write-Host ""

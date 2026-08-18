@@ -6,6 +6,9 @@ from src.config import DOWNLOAD_BASE_URL, RETRY_COUNT, RETRY_DELAY
 from src.converter import convert_to_traditional
 from src.scraper import format_index_token
 from src.logutil import _write_log, _write_log_header, _extract_status
+from src.logtext import log_t
+from src.sitedata import SIDE_INDEX_PREFIX
+from src.i18n import t
 
 _session: cf_requests.Session | None = None
 
@@ -41,8 +44,11 @@ def _fetch_bytes(aid: str, vid: int, charset: str,
         except Exception as e:
             # 只記類型 + status code + 重試次數，絕不記 url（見 windows-tool.md「錯誤行怎麼寫」）
             status = resp.status_code if resp is not None else _extract_status(e)
-            retry_label = "無限次" if infinite else f"{attempt}/{retry_count}"
-            _write_log(f"vid={vid} charset={charset} -> {type(e).__name__}: HTTP {status} | 重試 {retry_label}", "ERROR")
+            retry_label = (log_t("retry.infinite") if infinite
+                           else f"{attempt}/{retry_count}")
+            _write_log(log_t("err.fetch", vid=vid, charset=charset,
+                             etype=type(e).__name__, status=status,
+                             retry=retry_label), "ERROR")
             if not infinite and attempt >= retry_count:
                 return None
             if max_attempts is not None and attempt >= max_attempts:
@@ -195,7 +201,7 @@ def scan_existing_volumes(volumes: list[dict], output_dir: str, book_name: str,
     for vol in volumes:
         seq_index = vol.get("seq_index", vol["index"])
         seq_total = vol.get("seq_total", total)
-        prefix = "外傳" if vol.get("category") == "side" else ""
+        prefix = SIDE_INDEX_PREFIX if vol.get("category") == "side" else ""
         filepath = build_filepath(output_dir, book_name, seq_index, vol["name"], seq_total,
                                   index_fmt, include_book_name, separator,
                                   index_prefix=prefix)
@@ -217,15 +223,17 @@ def run_download_all(aid: str, book_name: str, volumes: list[dict],
     fail_volumes: list[dict] = []
     garbled_volumes: list[dict] = []
 
-    retry_label_hdr = "無限次" if retry_count <= 0 else f"{retry_count}x"
+    retry_label_hdr = (log_t("retry.infinite") if retry_count <= 0
+                       else f"{retry_count}x")
     task_start = time.time()
-    _write_log_header(f"下載 {book_name} | {total}卷 | retry:{retry_label_hdr}")
+    _write_log_header(log_t("hdr.download", book=book_name, total=total,
+                            retry=retry_label_hdr))
 
     for i, vol in enumerate(volumes, 1):
         msg_queue.put(("progress", i, total, vol["name"]))
         seq_index = vol.get("seq_index", vol["index"])
         seq_total = vol.get("seq_total", total)
-        prefix = "外傳" if vol.get("category") == "side" else ""
+        prefix = SIDE_INDEX_PREFIX if vol.get("category") == "side" else ""
         index_str = format_index_token(seq_index, seq_total, "padded", prefix)
         try:
             filepath = build_filepath(output_dir, book_name, seq_index, vol["name"], seq_total,
@@ -238,7 +246,8 @@ def run_download_all(aid: str, book_name: str, volumes: list[dict],
                 success += 1
                 if check_garbled(filepath):
                     garbled_volumes.append(vol)
-                    msg_queue.put(("log", "warn", index_str, vol["name"], "偵測到亂碼"))
+                    msg_queue.put(("log", "warn", index_str, vol["name"],
+                                   t("dl.detail.garbled")))
                 else:
                     msg_queue.put(("log", "ok", index_str, vol["name"], ""))
             else:
@@ -246,25 +255,33 @@ def run_download_all(aid: str, book_name: str, volumes: list[dict],
                 fail_volumes.append(vol)
                 if skipped:
                     skip_event.clear()
-                    msg_queue.put(("log", "skip", index_str, vol["name"], "已跳過"))
+                    msg_queue.put(("log", "skip", index_str, vol["name"],
+                                   t("dl.detail.skipped")))
                 else:
-                    retry_label = "無限次" if retry_count <= 0 else f"{retry_count}x"
-                    msg_queue.put(("log", "fail", index_str, vol["name"], f"retry {retry_label} 失敗"))
+                    retry_label = (t("dl.retry.infinite") if retry_count <= 0
+                                   else f"{retry_count}x")
+                    msg_queue.put(("log", "fail", index_str, vol["name"],
+                                   t("dl.detail.retry_failed", retry=retry_label)))
         except Exception as e:
             # 單一卷發生非預期錯誤（例如路徑無法寫入）不應讓整批下載卡死
             fail_volumes.append(vol)
             # 只記類型 + status code，絕不記 {e} 全文 / url；書名/卷序已在任務起始行
             status = _extract_status(e)
-            _write_log(f"{book_name} {index_str} -> {type(e).__name__}: HTTP {status}", "ERROR")
-            msg_queue.put(("log", "fail", index_str, vol["name"], f"錯誤：{e}"))
+            _write_log(log_t("err.volume", book=book_name, index=index_str,
+                             etype=type(e).__name__, status=status), "ERROR")
+            msg_queue.put(("log", "fail", index_str, vol["name"],
+                           t("dl.detail.error", err=e)))
 
     elapsed = int(time.time() - task_start)
     ok_all = not fail_volumes
     result_text = (
-        f"成功 {success}/{total} 卷" if ok_all
-        else f"成功 {success}/{total} 卷，失敗 {len(fail_volumes)} 卷"
+        log_t("result.ok", success=success, total=total) if ok_all
+        else log_t("result.partial", success=success, total=total,
+                   failed=len(fail_volumes))
     )
-    _write_log(f"{result_text}，耗時 {elapsed // 60}分{elapsed % 60}秒", "OK" if ok_all else "FAIL")
+    _write_log(log_t("result.elapsed", result=result_text,
+                     minutes=elapsed // 60, seconds=elapsed % 60),
+               "OK" if ok_all else "FAIL")
 
     msg_queue.put(("done", success, fail_volumes, garbled_volumes))
 
@@ -282,15 +299,17 @@ def run_repair_all(aid: str, book_name: str, volumes: list[dict],
     fail_volumes: list[dict] = []
     garbled_volumes: list[dict] = []
 
-    retry_label_hdr = "無限次" if retry_count <= 0 else f"{retry_count}x"
+    retry_label_hdr = (log_t("retry.infinite") if retry_count <= 0
+                       else f"{retry_count}x")
     task_start = time.time()
-    _write_log_header(f"修復 {book_name} | {total}卷 | retry:{retry_label_hdr}")
+    _write_log_header(log_t("hdr.repair", book=book_name, total=total,
+                            retry=retry_label_hdr))
 
     for i, vol in enumerate(volumes, 1):
         msg_queue.put(("progress", i, total, vol["name"]))
         seq_index = vol.get("seq_index", vol["index"])
         seq_total = vol.get("seq_total", total)
-        prefix = "外傳" if vol.get("category") == "side" else ""
+        prefix = SIDE_INDEX_PREFIX if vol.get("category") == "side" else ""
         index_str = format_index_token(seq_index, seq_total, "padded", prefix)
         try:
             filepath = build_filepath(output_dir, book_name, seq_index, vol["name"], seq_total,
@@ -302,30 +321,39 @@ def run_repair_all(aid: str, book_name: str, volumes: list[dict],
             if skipped:
                 skip_event.clear()
                 garbled_volumes.append(vol)
-                msg_queue.put(("log", "skip", index_str, vol["name"], "已跳過"))
+                msg_queue.put(("log", "skip", index_str, vol["name"],
+                               t("dl.detail.skipped")))
             elif result is None:
                 fail_volumes.append(vol)
-                msg_queue.put(("log", "fail", index_str, vol["name"], "修復失敗"))
+                msg_queue.put(("log", "fail", index_str, vol["name"],
+                               t("dl.detail.repair_failed")))
             elif result is True:
                 garbled_volumes.append(vol)
-                msg_queue.put(("log", "warn", index_str, vol["name"], "修復後仍有亂碼"))
+                msg_queue.put(("log", "warn", index_str, vol["name"],
+                               t("dl.detail.still_garbled")))
             else:
                 success += 1
-                msg_queue.put(("log", "ok", index_str, vol["name"], "已修復"))
+                msg_queue.put(("log", "ok", index_str, vol["name"],
+                               t("dl.detail.repaired")))
         except Exception as e:
             # 單一卷發生非預期錯誤（例如路徑無法寫入）不應讓整批修復卡死
             fail_volumes.append(vol)
             # 只記類型 + status code，絕不記 {e} 全文 / url；書名/卷序已在任務起始行
             status = _extract_status(e)
-            _write_log(f"{book_name} {index_str} -> {type(e).__name__}: HTTP {status}", "ERROR")
-            msg_queue.put(("log", "fail", index_str, vol["name"], f"錯誤：{e}"))
+            _write_log(log_t("err.volume", book=book_name, index=index_str,
+                             etype=type(e).__name__, status=status), "ERROR")
+            msg_queue.put(("log", "fail", index_str, vol["name"],
+                           t("dl.detail.error", err=e)))
 
     elapsed = int(time.time() - task_start)
     ok_all = not fail_volumes
     result_text = (
-        f"成功 {success}/{total} 卷" if ok_all
-        else f"成功 {success}/{total} 卷，失敗 {len(fail_volumes)} 卷"
+        log_t("result.ok", success=success, total=total) if ok_all
+        else log_t("result.partial", success=success, total=total,
+                   failed=len(fail_volumes))
     )
-    _write_log(f"{result_text}，耗時 {elapsed // 60}分{elapsed % 60}秒", "OK" if ok_all else "FAIL")
+    _write_log(log_t("result.elapsed", result=result_text,
+                     minutes=elapsed // 60, seconds=elapsed % 60),
+               "OK" if ok_all else "FAIL")
 
     msg_queue.put(("done", success, fail_volumes, garbled_volumes))

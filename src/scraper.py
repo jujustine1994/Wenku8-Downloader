@@ -3,14 +3,10 @@ import urllib.parse
 from bs4 import BeautifulSoup
 from curl_cffi import requests as cf_requests
 from src.config import CATALOG_BASE_URL
+from src.sitedata import MAIN_VOLUME_RE, TITLE_TRIM_RE, UNKNOWN_BOOK_TITLE
 
-_MAIN_VOL_RE = re.compile(
-    r'第[一二三四五六七八九十百千萬\d]+[卷册冊部篇章]'
-    r'|Vol\.?\s*\d+'
-    r'|卷[一二三四五六七八九十百千萬\d]+'
-    r'|\d+[卷册冊部篇章]',
-    re.IGNORECASE,
-)
+# 本模組解析 wenku8 回傳的 HTML。網站是簡體站，樣式裡的簡體字是**比對用的
+# 資料**，全部集中在 src/sitedata.py，一律不翻譯——翻了會靜默抓不到內容。
 
 # Module-level session：重用 TLS 連線，避免每次重建握手
 _session: cf_requests.Session | None = None
@@ -25,7 +21,7 @@ def _get_session() -> cf_requests.Session:
 
 def classify_volume(name: str, side_keywords: list[str]) -> str:
     """Returns 'main' or 'side'. Main-pattern whitelist takes priority."""
-    if _MAIN_VOL_RE.search(name):
+    if MAIN_VOLUME_RE.search(name):
         return "main"
     name_lower = name.lower()
     for kw in side_keywords:
@@ -57,7 +53,9 @@ def parse_aid_from_url(url: str) -> str:
     if m:
         return m.group(1)
 
-    raise ValueError("無法識別書號，請貼上目錄網址或直接輸入書號數字")
+    # 開發者導向的例外訊息，不走 i18n：呼叫端（main._on_load）捕捉 ValueError
+    # 後顯示自己那條已翻譯的狀態訊息，這串永遠不會出現在畫面上。
+    raise ValueError("Cannot determine aid from the given URL or book number")
 
 
 def fetch_catalog(aid: str) -> BeautifulSoup:
@@ -76,13 +74,12 @@ def parse_book_title(soup: BeautifulSoup) -> str:
     title_tag = soup.find("title")
     if title_tag:
         raw = title_tag.get_text(strip=True)
-        # wenku8 格式："書名小說在線閱讀與TXT電子書下載-作者-出版社-網站名"
-        # 取書名關鍵字前的部分
-        m = re.match(r"^(.+?)(?:小说|TXT|全文|在线|电子书)", raw, re.IGNORECASE)
+        # 取書名關鍵字前的部分（樣式見 sitedata.TITLE_TRIM_RE）
+        m = TITLE_TRIM_RE.match(raw)
         if m:
             return m.group(1).strip()
         return raw.split(" - ")[0].strip()
-    return "未知書名"
+    return UNKNOWN_BOOK_TITLE
 
 
 def parse_volumes(soup: BeautifulSoup) -> list[dict]:

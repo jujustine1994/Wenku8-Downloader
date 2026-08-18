@@ -1,5 +1,34 @@
 # CHANGELOG
 
+## feat/i18n（進行中，未合併）
+
+多語言（繁中／简中／English／日本語）遷移，做到批次 3 的一半因故中斷。
+接手說明見專案根目錄 `I18N_RESUME.md`。
+
+**新增檔案**
+- `src/i18n.py` — `t()` 查表核心（目標語言→母語言→key 本身，永不 raise／回空字串）
+- `src/locales/{zh_tw,zh_cn,en,ja}.py` — 語言檔；`zh_tw` 母表已完整（約 130 條 key），其餘三個仍為空
+- `src/logtext.py` — 落檔字串，**固定繁中**，不跟使用者語言走
+- `src/sitedata.py` — 永遠不翻的資料字串（檔名前綴、爬蟲比對關鍵字、HTML 解析樣式）
+
+**變更**
+- 區域變數 `t = THEMES.get(...)` 改名為 `theme`（2 處），讓出 `t` 給 i18n
+- `.tool_config.json` 新增 `language` 欄位（預設空字串，才分得出「沒選過」）
+- 首次啟動跳語言選擇視窗（刻意不翻譯）；「設定」分頁最上方加 Language 下拉，
+  套用後提示重啟（重開生效，不做即時切換）
+- `downloader.py` / `converter.py` 推到畫面的訊息改走 `t()`（約 11 條）
+- `scraper.py` 的 HTML 解析樣式與書名 fallback 移入 `sitedata.py`；
+  `parse_aid_from_url` 的 `ValueError` 訊息改英文（開發者導向，永不顯示）
+
+**驗收**
+- 測試 89 → 89（**既有測試一條都沒改，全綠**）
+- 檔名／目錄／檔案內容與改前**逐字相同**（12 條路徑 + 12 個檔案，4 種命名組合，
+  走真正的組裝與寫檔函式，網路以 mock 取代）
+- 9 條 log 行與改前 f-string 逐字相同
+- 繁中 GUI 建置 248 條 widget 文字、殘留 key 0
+- ⚠ 四語驗收、防退化測試、負向驗證**尚未執行**
+
+
 ## 現狀
 
 **已完成功能：**
@@ -33,6 +62,11 @@
 ---
 
 ## 更新記錄
+
+### 2026-08-17 — launcher.ps1 拿掉失效的 winget Python 安裝步驟
+`winget install --id Python.Python.3`（不帶次版號）已被上游下架，靜默失效。改成
+只檢查 uv，`uv venv venv --python 3.13` 讓 uv 自己下載 Python。步驟從 [1/3]~[3/3]
+改成 [1/2]~[2/2]。
 
 ### 2026-07-23（v18）
 - 新增：下載完成後若有失敗/亂碼卷，自動接續觸發修復流程，不用手動按「重試/修復」

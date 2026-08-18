@@ -2,10 +2,14 @@ import ctypes
 import json
 import os
 import queue
+import subprocess
+import sys
 import threading
 import tkinter as tk
 from tkinter import ttk, scrolledtext
 
+from src import i18n
+from src.i18n import t
 from src.config import OUTPUT_DIR, RETRY_COUNT, RETRY_DELAY
 from src.scraper import (
     parse_aid_from_url, fetch_catalog, parse_book_title, parse_volumes,
@@ -13,6 +17,8 @@ from src.scraper import (
 )
 from src.downloader import run_download_all, run_repair_all, scan_existing_volumes
 from src.logutil import _write_log, _extract_status
+from src.logtext import log_t
+from src.sitedata import DEFAULT_SIDE_KEYWORDS, SIDE_INDEX_PREFIX
 
 # 高 DPI 感知（4K/2K 螢幕不模糊，需在 Tk() 前呼叫）
 try:
@@ -23,6 +29,32 @@ except Exception:
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 PROJECT_ROOT = os.path.dirname(SCRIPT_DIR)
 CONFIG_PATH = os.path.join(SCRIPT_DIR, ".tool_config.json")
+
+# language 預設是**空字串**，不是 "zh_tw"：填 "zh_tw" 就分不出「使用者選了
+# 繁中」和「使用者沒選過」，首次啟動的語言視窗就不知道該不該跳。
+DEFAULT_CONFIG = {"language": ""}
+
+
+def load_config() -> dict:
+    """讀 .tool_config.json。檔案不存在或壞掉都回預設值，不讓主程式起不來。"""
+    cfg = dict(DEFAULT_CONFIG)
+    try:
+        with open(CONFIG_PATH, encoding="utf-8") as f:
+            cfg.update(json.load(f))
+    except (FileNotFoundError, json.JSONDecodeError, OSError):
+        pass
+    return cfg
+
+
+def save_config(data: dict) -> None:
+    """把 data 合併進設定檔。存不進去就算了——設定寫不了不該讓主程式掛掉。"""
+    try:
+        cfg = load_config()
+        cfg.update(data)
+        with open(CONFIG_PATH, "w", encoding="utf-8") as f:
+            json.dump(cfg, f, ensure_ascii=False, indent=2)
+    except OSError:
+        pass
 
 
 def resolve_output_dir(config: dict, project_root: str) -> str:
@@ -38,12 +70,6 @@ FM = ("Consolas", 12)
 FH = ("Microsoft JhengHei", 10)
 
 URL_PLACEHOLDER = "https://www.wenku8.net/modules/article/reader.php?aid=XXXX"
-
-DEFAULT_SIDE_KEYWORDS = [
-    "外傳", "番外", "特典", "SS", "EX", "Extra", "Side Story",
-    "幕間", "插話", "間章", "附錄", "後記", "後日談", "後日譚",
-    "特別篇", "短篇", "短篇集", "Epilogue",
-]
 
 THEMES = {
     "light": {
@@ -116,6 +142,10 @@ class App:
         self._aid = None
         self._book_name = None
         _cfg = self._load_config()
+        # 語言必須在建任何 widget 之前設好——t() 是建置時查一次表，
+        # 設晚了介面會停在預設語言。
+        i18n.set_lang(_cfg.get("language"))
+        self._lang_saved_code = i18n.get_lang()
         self._current_theme = _cfg.get("theme", "light")
         self._path_var = tk.StringVar()
         self._retry_count = int(_cfg.get("retry_count", RETRY_COUNT))
@@ -495,11 +525,11 @@ class App:
     USE_SV_TTK = False
 
     def _apply_theme(self, theme_key: str):
-        t = THEMES.get(theme_key, THEMES["light"])
+        theme = THEMES.get(theme_key, THEMES["light"])
         if self.USE_SV_TTK:
             try:
                 import sv_ttk
-                sv_ttk.set_theme(t["sv"])
+                sv_ttk.set_theme(theme["sv"])
             except ImportError:
                 pass
 
@@ -512,16 +542,18 @@ class App:
         style.configure("TEntry", font=F)
         style.configure("TCombobox", font=F)
         style.configure("TNotebook.Tab", font=FB, padding=(20, 10))
-        style.configure("TLabelframe.Label", font=F, foreground=t["frame_title"])
-        label_fg = t["label_fg"]
+        style.configure("TLabelframe.Label", font=F, foreground=theme["frame_title"])
+        label_fg = theme["label_fg"]
         for w in ("TLabel", "TCheckbutton", "TRadiobutton"):
             kw = {"font": F}
             if label_fg:
                 kw["foreground"] = label_fg
             style.configure(w, **kw)
 
-        self.log_text.config(bg=t["log_bg"], fg=t["log_fg"], insertbackground=t["log_fg"])
-        self._conv_log.config(bg=t["log_bg"], fg=t["log_fg"], insertbackground=t["log_fg"])
+        self.log_text.config(bg=theme["log_bg"], fg=theme["log_fg"],
+                             insertbackground=theme["log_fg"])
+        self._conv_log.config(bg=theme["log_bg"], fg=theme["log_fg"],
+                              insertbackground=theme["log_fg"])
         self._current_theme = theme_key
 
     # ---- 設定 tab ----
@@ -552,8 +584,33 @@ class App:
             lambda e: canvas.itemconfig(content_win, width=e.width),
         )
 
+        # ===== 語言 =====
+        # 標籤固定英文，選項用各語言自己的說法——任何語言下都認得出來。
+        # 選項由 i18n.LANGUAGES 動態生成，新增語言時這裡一個字都不必改。
+        lang_row = ttk.Frame(content)
+        lang_row.pack(fill="x", pady=(0, 6))
+        ttk.Label(lang_row, text="Language:", font=FB).pack(side="left", padx=(0, 8))
+        self._lang_choices = i18n.available_languages()
+        # ⚠ 讀 config 不讀 i18n.get_lang()：使用者選了新語言但按「稍後」不重啟時，
+        # runtime 語言還是舊的，用 runtime 值當基準會把他的選擇默默寫回去。
+        _saved = self._load_config().get("language", "")
+        self._lang_saved_code = _saved if i18n.is_supported(_saved) else i18n.DEFAULT_LANG
+        _names = [name for _, name in self._lang_choices]
+        _current = next((n for c, n in self._lang_choices
+                         if c == self._lang_saved_code), _names[0])
+        self._lang_var = tk.StringVar(value=_current)
+        self._lang_combo = ttk.Combobox(
+            lang_row, textvariable=self._lang_var, values=_names,
+            width=14, state="readonly", font=F
+        )
+        self._lang_combo.pack(side="left")
+
+        ttk.Separator(content, orient="horizontal").pack(fill="x", pady=16)
+
         # ===== 外觀 =====
-        ttk.Label(content, text="外觀", font=FB).pack(anchor="w", pady=(0, 6))
+        ttk.Label(content, text=t("gui.settings.appearance"), font=FB).pack(
+            anchor="w", pady=(0, 6)
+        )
         appearance_row = ttk.Frame(content)
         appearance_row.pack(fill="x")
         self._theme_summary_label = ttk.Label(
@@ -698,14 +755,56 @@ class App:
         self._fname_index = self._fname_index_var.get()
         self._fname_book_name = self._fname_book_var.get()
         self._fname_separator = self._fname_sep_var.get() or " "
+        new_lang = self._selected_lang_code()
+        lang_changed = new_lang != self._lang_saved_code
         self._save_config({
             "retry_count": self._retry_count,
             "retry_delay": self._retry_delay,
             "filename_index": self._fname_index,
             "filename_book_name": self._fname_book_name,
             "filename_separator": self._fname_separator,
+            "language": new_lang,
         })
+        self._lang_saved_code = new_lang
         self._set_status("設定已套用", "success")
+        # 只有語言真的變更才打擾使用者——改重試次數不該跳重啟視窗
+        if lang_changed:
+            self._prompt_restart_for_language()
+
+    def _selected_lang_code(self) -> str:
+        """把下拉選單顯示的名稱換回代號。取不到就維持原設定，不亂改。"""
+        chosen = self._lang_var.get()
+        for code, name in self._lang_choices:
+            if name == chosen:
+                return code
+        return self._lang_saved_code
+
+    def _prompt_restart_for_language(self):
+        """語言變更後問是否重啟。
+
+        視窗全英文：此刻介面還是舊語言、使用者要的是新語言，用任一方都尷尬，
+        英文最中立。
+        """
+        from tkinter import messagebox
+        if messagebox.askyesno(
+            "Language Changed",
+            "Restart the app to apply the new language.\n\nRestart now?",
+        ):
+            self._restart_app()
+
+    def _restart_app(self):
+        """起一個新行程再關掉自己。
+
+        不用 os.execv：Windows 上它會就地覆寫當前行程，tkinter 還沒釋放的視窗
+        handle 可能殘留，看起來像關不掉的殭屍視窗。
+        """
+        try:
+            subprocess.Popen([sys.executable, *sys.argv], close_fds=True)
+        except OSError:
+            # 起不了新行程就什麼都不做——使用者下次自己開一樣會生效，
+            # 這裡把舊視窗關掉反而讓人以為程式壞了
+            return
+        self.root.destroy()
 
     def _reset_settings_fields(self):
         """取消：把設定 tab 上的欄位還原成目前實際生效的值（未套用的修改會被丟棄）。"""
@@ -717,6 +816,9 @@ class App:
         self._fname_index_var.set(self._fname_index)
         self._fname_book_var.set(self._fname_book_name)
         self._fname_sep_var.set(self._fname_separator)
+        self._lang_var.set(next((n for c, n in self._lang_choices
+                                 if c == self._lang_saved_code),
+                                self._lang_choices[0][1]))
 
     # ---- 外觀設定（彈出視窗）----
 
@@ -756,32 +858,36 @@ class App:
         ttk.Label(right, text="預覽", foreground="gray").pack(pady=(4, 0))
 
         def draw_preview(key):
-            t = THEMES.get(key, THEMES["light"])
+            theme = THEMES.get(key, THEMES["light"])
             c = preview
             c.delete("all")
             v = lambda n: round(n * S)
             fs = round(7 * S)
-            c.create_rectangle(0, 0, PW, PH, fill=t["win_bg"], outline="")
-            tbar_bg = t["card_bg"] if t["sv"] == "light" else "#2D2D2D"
+            c.create_rectangle(0, 0, PW, PH, fill=theme["win_bg"], outline="")
+            tbar_bg = theme["card_bg"] if theme["sv"] == "light" else "#2D2D2D"
             c.create_rectangle(0, 0, PW, v(22), fill=tbar_bg, outline="")
             c.create_text(v(10), v(11), text="Wenku8 Downloader", anchor="w",
-                          fill=t["frame_title"], font=("Microsoft JhengHei", fs, "bold"))
-            c.create_rectangle(v(8), v(28), PW - v(8), v(68), fill=t["card_bg"], outline=t["border"])
+                          fill=theme["frame_title"], font=("Microsoft JhengHei", fs, "bold"))
+            c.create_rectangle(v(8), v(28), PW - v(8), v(68),
+                               fill=theme["card_bg"], outline=theme["border"])
             c.create_text(v(16), v(33), text=" 書籍目錄網址 ", anchor="w",
-                          fill=t["frame_title"], font=("Microsoft JhengHei", fs, "bold"))
-            c.create_rectangle(v(16), v(44), PW - v(16), v(58), fill=t["log_bg"], outline=t["border"])
+                          fill=theme["frame_title"], font=("Microsoft JhengHei", fs, "bold"))
+            c.create_rectangle(v(16), v(44), PW - v(16), v(58),
+                               fill=theme["log_bg"], outline=theme["border"])
             bx1, bx2 = v(65), v(145)
-            c.create_rectangle(bx1, v(74), bx2, v(88), fill=t["btn_bg"], outline="")
+            c.create_rectangle(bx1, v(74), bx2, v(88), fill=theme["btn_bg"], outline="")
             c.create_text((bx1 + bx2) / 2, v(81), text="下載全部",
-                          fill=t["btn_fg"], font=("Microsoft JhengHei", fs))
-            c.create_rectangle(v(8), v(94), PW - v(8), PH - v(6), fill=t["card_bg"], outline=t["border"])
+                          fill=theme["btn_fg"], font=("Microsoft JhengHei", fs))
+            c.create_rectangle(v(8), v(94), PW - v(8), PH - v(6),
+                               fill=theme["card_bg"], outline=theme["border"])
             c.create_text(v(16), v(99), text=" 進度 ", anchor="w",
-                          fill=t["frame_title"], font=("Microsoft JhengHei", fs, "bold"))
-            bar_bg = "#E5E5E5" if t["sv"] == "light" else "#3A3A3A"
+                          fill=theme["frame_title"], font=("Microsoft JhengHei", fs, "bold"))
+            bar_bg = "#E5E5E5" if theme["sv"] == "light" else "#3A3A3A"
             c.create_rectangle(v(16), v(110), PW - v(16), v(116), fill=bar_bg, outline="")
-            c.create_rectangle(v(16), v(110), v(70), v(116), fill=t["pbar"], outline="")
-            c.create_rectangle(v(16), v(122), PW - v(16), PH - v(12), fill=t["log_bg"], outline=t["border"])
-            c.create_text(v(20), v(128), text="等待中...", anchor="nw", fill=t["log_fg"],
+            c.create_rectangle(v(16), v(110), v(70), v(116), fill=theme["pbar"], outline="")
+            c.create_rectangle(v(16), v(122), PW - v(16), PH - v(12),
+                               fill=theme["log_bg"], outline=theme["border"])
+            c.create_text(v(20), v(128), text="等待中...", anchor="nw", fill=theme["log_fg"],
                           font=("Microsoft JhengHei", fs))
 
         theme_var.trace_add("write", lambda *_: draw_preview(theme_var.get()))
@@ -903,20 +1009,10 @@ class App:
     # ---- 設定檔 ----
 
     def _load_config(self) -> dict:
-        try:
-            with open(CONFIG_PATH, encoding="utf-8") as f:
-                return json.load(f)
-        except (FileNotFoundError, json.JSONDecodeError):
-            return {}
+        return load_config()
 
     def _save_config(self, data: dict):
-        try:
-            cfg = self._load_config()
-            cfg.update(data)
-            with open(CONFIG_PATH, "w", encoding="utf-8") as f:
-                json.dump(cfg, f, ensure_ascii=False, indent=2)
-        except Exception:
-            pass
+        save_config(data)
 
     # ---- 勾選清單 ----
 
@@ -929,7 +1025,9 @@ class App:
             self._check_vars.append(var)
             seq_index = v.get("seq_index", v["index"])
             seq_total = v.get("seq_total", len(volumes))
-            prefix = "外傳" if v.get("category") == "side" else ""
+            # 這個標籤刻意跟檔名用同一個前綴／編號組法，讓使用者在清單上看到的
+            # 就是待會兒存出來的檔名開頭。所以它是資料，不翻譯。
+            prefix = SIDE_INDEX_PREFIX if v.get("category") == "side" else ""
             label = format_index_token(seq_index, seq_total, "padded", prefix)
             cb = ttk.Checkbutton(
                 self._cb_frame,
@@ -1357,7 +1455,8 @@ class App:
                     hint = "（403 錯誤：網站拒絕存取，可稍後再試）" if status == 403 else ""
                     self._set_status(f"載入失敗：{err}{hint}", "error")
                     # 只記類型 + status code + 書號，絕不記 url / response 全文
-                    _write_log(f"載入目錄 aid={self._aid} -> {err_type}: HTTP {status}", "ERROR")
+                    _write_log(log_t("err.catalog", aid=self._aid,
+                                     etype=err_type, status=status), "ERROR")
 
                 elif kind == "progress":
                     _, current, total, vol_name = msg
@@ -1484,12 +1583,60 @@ class App:
         self.root.after(100, self._poll_queue)
 
 
+def _pick_language_on_first_run(root: tk.Tk) -> None:
+    """首次啟動時問一次語言，選完寫進 .tool_config.json，之後不再出現。
+
+    視窗刻意**不翻譯**：這時候還不知道使用者要哪個語言，用任一種當說明都
+    在賭。只有一個英文抬頭，其餘全是各語言的自稱，看得懂哪個就點哪個。
+
+    直接關掉視窗＝接受第一個選項並**照樣存檔**——需求是「選完就記住不要再
+    跳」，關掉還一直跳才是煩人。選錯了在「設定」分頁隨時能改。
+    """
+    cfg = load_config()
+    if i18n.is_supported(cfg.get("language", "")):
+        return                      # 選過了，直接進主畫面
+
+    choices = i18n.available_languages()
+    chosen = {"code": choices[0][0]}
+
+    dlg = tk.Toplevel(root)
+    dlg.title("Language")
+    dlg.resizable(False, False)
+    dlg.attributes("-topmost", True)
+
+    ttk.Label(dlg, text="Select your language",
+              font=("", 12, "bold")).pack(padx=28, pady=(20, 4))
+    ttk.Label(dlg, text="You can change this later in Settings.",
+              foreground="#555555").pack(padx=28, pady=(0, 14))
+
+    def _choose(code: str) -> None:
+        chosen["code"] = code
+        dlg.destroy()
+
+    for code, name in choices:
+        ttk.Button(dlg, text=name, width=20,
+                   command=lambda c=code: _choose(c)).pack(padx=28, pady=3)
+    ttk.Frame(dlg, height=10).pack()
+
+    dlg.update_idletasks()
+    x = root.winfo_rootx() + (root.winfo_width() - dlg.winfo_width()) // 2
+    y = root.winfo_rooty() + (root.winfo_height() - dlg.winfo_height()) // 3
+    dlg.geometry(f"+{max(x, 0)}+{max(y, 0)}")
+
+    dlg.grab_set()
+    dlg.protocol("WM_DELETE_WINDOW", dlg.destroy)   # 關掉＝用預設值，照樣存
+    root.wait_window(dlg)
+
+    save_config({"language": chosen["code"]})
+
+
 def main():
     show_cth_banner()
     root = tk.Tk()
     root.attributes("-topmost", True)
     root.update()
     root.attributes("-topmost", False)
+    _pick_language_on_first_run(root)
     App(root)
     root.mainloop()
 
