@@ -9,9 +9,18 @@ _cc = OpenCC("s2twp")
 
 _FALLBACK_ENCODINGS = (("utf-8", "utf-8"), ("gbk", "GBK"), ("big5", "Big5"))
 
+# OpenCC s2twp 詞庫會把「奔驰」整組當專有名詞（賓士汽車）轉換，
+# 但小說原文多數是「狂奔奔馳」的字面意思，故轉換後覆寫回來。
+_OVERRIDES = (
+    ("賓士", "奔馳"),
+)
+
 
 def convert_to_traditional(text: str) -> str:
-    return _cc.convert(text)
+    converted = _cc.convert(text)
+    for wrong, right in _OVERRIDES:
+        converted = converted.replace(wrong, right)
+    return converted
 
 
 def _detect_and_decode(raw: bytes) -> tuple[str, str]:
