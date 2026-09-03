@@ -1,3 +1,4 @@
+import html
 import os
 import time
 import queue
@@ -63,14 +64,17 @@ def _decode_response(raw: bytes, charset_hint: str) -> str:
     wenku8 的 charset query 參數不可信：實測 charset=utf-8 實際回傳的是
     UTF-16 LE bytes（帶 BOM），charset=big5 實際回傳的是 UTF-8（帶 BOM）。
     一律先偵測 BOM，偵測不到才照參數名稱猜測解碼。
+    來源 txt 內文常殘留未轉譯的 HTML 實體（如 &#8231; 間隔號），一併 unescape。
     """
     if raw.startswith(b"\xff\xfe"):
-        return raw[2:].decode("utf-16-le", errors="replace")
-    if raw.startswith(b"\xfe\xff"):
-        return raw[2:].decode("utf-16-be", errors="replace")
-    if raw.startswith(b"\xef\xbb\xbf"):
-        return raw.decode("utf-8-sig", errors="replace")
-    return raw.decode(charset_hint, errors="replace")
+        text = raw[2:].decode("utf-16-le", errors="replace")
+    elif raw.startswith(b"\xfe\xff"):
+        text = raw[2:].decode("utf-16-be", errors="replace")
+    elif raw.startswith(b"\xef\xbb\xbf"):
+        text = raw.decode("utf-8-sig", errors="replace")
+    else:
+        text = raw.decode(charset_hint, errors="replace")
+    return html.unescape(text)
 
 
 def _fetch_best_text(aid: str, vid: int,
