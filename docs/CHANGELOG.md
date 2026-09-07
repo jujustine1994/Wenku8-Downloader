@@ -33,7 +33,8 @@
 
 **已完成功能：**
 - URL 解析（aid 提取，支援 reader.php?aid=、/book/XXXX.htm、純數字書號）
-- 目錄頁爬取與卷列表解析（curl_cffi 模擬 Chrome TLS，繞過 Cloudflare）
+- 目錄頁爬取與卷列表解析（curl_cffi 模擬 Chrome TLS 繞過 Cloudflare；
+  reader.php 被 challenge 擋下時 fallback 到 /novel/.../index.htm）
 - 逐卷下載（retry 3x）
 - tkinter UI（進度條、記錄區、主題切換）
 - 卷選單（可勾選指定卷下載，全選/全不選）
@@ -62,6 +63,39 @@
 ---
 
 ## 更新記錄
+
+### 2026-09-07 — 新增「下載後自動簡轉繁」開關
+「設定」分頁「下載」區塊新增勾選項，關閉後下載/修復都保留原始簡體，不經過
+`converter.convert_to_traditional()`。預設維持開啟（跟改之前行為一致）。
+- `downloader.download_volume()`／`repair_volume()`／`run_download_all()`／
+  `run_repair_all()` 新增 `convert_traditional` 參數（預設 `True`），一路傳到
+  寫檔前那行轉換
+- `main.py` 存到 `.tool_config.json` 的 `convert_traditional` 欄位
+- 既有測試同步調整一條呼叫參數位置斷言（`repair_volume` 多了一個參數，
+  `max_attempts` 不再是最後一個位置參數），89 測試全綠
+
+### 2026-09-07 — reader.php 遭 Cloudflare 升級為 JS challenge，目錄抓取改走 fallback
+`reader.php`（目錄 API）被 Cloudflare 升級成 Managed Challenge（回應帶
+`cf-mitigated: challenge`），`curl_cffi` 的 TLS 指紋模擬對這種互動式挑戰無效，
+一律 403。一般網頁 `/novel/{分類}/{aid}/index.htm` 目前未受同等防護，且卷/
+章節表格結構與 reader.php 相容（卷標題 `<td>` 直接帶 `vid` 屬性）。
+- `scraper.fetch_catalog()`：reader.php 失敗時才觸發 `_fetch_catalog_fallback()`
+  —— 先抓 `/book/{aid}.htm` 找出分類代碼，再組 `/novel/{分類}/{aid}/index.htm`；
+  reader.php 正常時完全不受影響，走原本路徑
+- `scraper.parse_volumes()`：新增讀取卷標題 `vid` 屬性的分支（index.htm 版型），
+  讀不到才照舊邏輯從第一章連結的 `cid` 反推，兩種頁面格式都能解析
+- `config.py` 新增 `BOOK_BASE_URL`／`NOVEL_BASE_URL`
+- 已用實際書號（1832）驗證 fallback 全流程：書名、卷數、vid 皆正確
+
+### 2026-08-23 — 設定分頁新增「版本更新」按鈕
+「設定」分頁識別區塊下方新增「檢查更新」／「一鍵安裝」，比對本機與 GitHub
+上游程式碼差異，供手動確認並一鍵套用。全程沒有任何一步自動觸發：檢查只讀
+不寫，有新版本才出現「一鍵安裝」，按下去先跳確認框列出實際變更摘要，使用
+者按確定才動檔案；更新完不自動重啟，跳訊息框請使用者自行關閉重開。
+- 新增：`scripts/check_update.ps1`（純資料層，git fetch/diff/checkout，只印一行 JSON）
+- 新增：`src/update_checker.py`（呼叫子行程、解析 JSON，不碰 tkinter）
+- 技術：`main.py` 新增 `_build_update_section()` 及對應事件處理，網路呼叫走背景執行緒 + `after(0, ...)` 送回主執行緒
+- i18n：`src/locales/zh_tw.py` 新增 `gui.settings.update`／`gui.btn.check_update`／`gui.btn.install_update`／`gui.update.*` 共 19 個 key（僅補在母表，其餘三語言檔沿用既有「先留空、之後再統一翻」慣例，未動）
 
 ### 2026-08-17 — launcher.ps1 拿掉失效的 winget Python 安裝步驟
 `winget install --id Python.Python.3`（不帶次版號）已被上游下架，靜默失效。改成

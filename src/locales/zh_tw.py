@@ -95,6 +95,28 @@ STRINGS: dict[str, str] = {
     "gui.btn.cancel":             "取消",
     "gui.status.settings_applied": "設定已套用",
 
+    # ── 設定分頁：版本更新 ──
+    # ⚠ 全程沒有任何一步自動觸發：「檢查更新」只讀不寫；有新版本才會出現
+    #   「一鍵安裝」，按下去還要先跳確認框，使用者按確定才真的動檔案。
+    #   更新完不自動重啟，只跳訊息框請使用者自己關掉重開。
+    "gui.settings.update":        "版本更新",
+    "gui.btn.check_update":       "檢查更新",
+    "gui.btn.install_update":     "一鍵安裝",
+    "gui.update.checking":        "檢查中...",
+    "gui.update.no_git":          "此版本非 git clone 安裝，無法自動更新，請至 GitHub 頁面手動下載最新版",
+    "gui.update.offline":         "連不上 GitHub，請檢查網路連線後再試一次",
+    "gui.update.dirty":           "偵測到本機程式碼有手動修改，為避免覆蓋已略過檢查",
+    "gui.update.ahead":           "本機有尚未回報的變更，為避免覆蓋已略過檢查",
+    "gui.update.up_to_date":      "已是最新版本",
+    "gui.update.available":       "發現新版本（{count} 筆變更），點擊「一鍵安裝」套用",
+    "gui.update.error":           "檢查失敗：{msg}",
+    "gui.update.confirm_title":   "確認安裝更新",
+    "gui.update.confirm_body":    "即將套用以下變更：\n\n{summary}\n\n確定要安裝嗎？",
+    "gui.update.installing":      "安裝中...",
+    "gui.update.updated":         "已安裝（{commit}），請關閉程式後重新開啟",
+    "gui.update.done_title":      "更新完成",
+    "gui.update.done_body":       "已安裝最新版本。請手動關閉本程式後重新開啟，讓變更生效。",
+
     # ── 外觀設定視窗 ──
     "gui.dlg.appearance":     "外觀設定",
     "gui.lbl.color_theme":    "配色主題",

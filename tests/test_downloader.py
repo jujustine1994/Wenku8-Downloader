@@ -683,4 +683,4 @@ def test_run_repair_all_passes_max_attempts_through(tmp_path):
     _, kwargs = mock_repair.call_args
     assert mock_repair.call_args[0][3:5] == (RETRY_COUNT, RETRY_DELAY)
     assert mock_repair.call_args.kwargs.get("max_attempts") == 50 or \
-           (len(mock_repair.call_args[0]) > 5 and mock_repair.call_args[0][-1] == 50)
+           (len(mock_repair.call_args[0]) > 5 and mock_repair.call_args[0][-2] == 50)

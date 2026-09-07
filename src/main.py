@@ -153,6 +153,7 @@ class App:
         self._fname_index = _cfg.get("filename_index", "padded")
         self._fname_book_name = bool(_cfg.get("filename_book_name", True))
         self._fname_separator = _cfg.get("filename_separator", " ")
+        self._convert_traditional = bool(_cfg.get("convert_traditional", True))
         self._side_keywords: list[str] = _cfg.get("side_keywords", list(DEFAULT_SIDE_KEYWORDS))
         self._last_batch_vids: set = set()
         self._repair_mode = False
@@ -664,6 +665,14 @@ class App:
         ).pack(side="left", padx=(8, 4))
         ttk.Label(row2, text="秒", font=F).pack(side="left")
 
+        row3 = ttk.Frame(content)
+        row3.pack(fill="x", pady=(12, 0))
+        self._convert_traditional_var = tk.BooleanVar(value=self._convert_traditional)
+        ttk.Checkbutton(
+            row3, text="下載後自動簡轉繁（關閉則保留原始簡體）",
+            variable=self._convert_traditional_var
+        ).pack(side="left")
+
         ttk.Separator(content, orient="horizontal").pack(fill="x", pady=16)
 
         # ===== 命名 =====
@@ -738,6 +747,11 @@ class App:
             identify_row, text="識別設定...", command=self._open_identify_dialog, width=14
         ).pack(side="right", ipady=4)
 
+        ttk.Separator(content, orient="horizontal").pack(fill="x", pady=16)
+
+        # ===== 版本更新 =====
+        self._build_update_section(content)
+
         # ===== 套用 / 取消（固定在底部，不隨內容捲動）=====
         btn_row = ttk.Frame(tab)
         btn_row.grid(row=1, column=0, columnspan=2, pady=(8, 12))
@@ -748,6 +762,118 @@ class App:
             side="left", padx=4, ipady=4
         )
 
+    # ------------------------------------------------------------------
+    # 版本更新區塊
+    #
+    # ⚠ 全程沒有任何一步自動觸發：「檢查更新」只讀不寫；有新版本才會出現
+    # 「一鍵安裝」，按下去還要先跳確認框，使用者按確定才真的動檔案。
+    # 更新完不自動重啟（跟語言切換不同），只跳訊息框請使用者自己關掉重開，
+    # 因為更新可能動到正在執行中的模組，自動重啟的邊界情況不值得為手動
+    # 觸發的功能多繞。
+    # ------------------------------------------------------------------
+
+    def _build_update_section(self, content: ttk.Frame):
+        ttk.Label(content, text=t("gui.settings.update"), font=FB).pack(
+            anchor="w", pady=(0, 6)
+        )
+        update_row = ttk.Frame(content)
+        update_row.pack(fill="x")
+
+        self._check_update_btn = ttk.Button(
+            update_row, text=t("gui.btn.check_update"),
+            command=self._on_check_update, width=14
+        )
+        self._check_update_btn.pack(side="left", ipady=4)
+
+        self._install_update_btn = ttk.Button(
+            update_row, text=t("gui.btn.install_update"),
+            command=self._on_install_update, width=14
+        )
+        # 有新版本才 pack，預設不顯示
+
+        self._update_status_label = ttk.Label(
+            content, text="", font=FH, foreground="gray",
+            justify="left", anchor="w", wraplength=420,
+        )
+        self._update_status_label.pack(anchor="w", pady=(6, 0), fill="x")
+
+        self._pending_update_summary = ""
+
+    def _on_check_update(self):
+        self._check_update_btn.config(state="disabled")
+        self._install_update_btn.pack_forget()
+        self._update_status_label.config(text=t("gui.update.checking"))
+
+        def worker():
+            from src import update_checker
+            result = update_checker.check_for_update()
+            try:
+                self.root.after(0, self._on_check_update_done, result)
+            except (RuntimeError, tk.TclError):
+                pass  # 視窗已關閉，結果沒人要了
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _on_check_update_done(self, result: dict):
+        self._check_update_btn.config(state="normal")
+        status = result.get("status")
+
+        if status == "no_git":
+            self._update_status_label.config(text=t("gui.update.no_git"))
+        elif status == "offline":
+            self._update_status_label.config(text=t("gui.update.offline"))
+        elif status == "dirty":
+            self._update_status_label.config(text=t("gui.update.dirty"))
+        elif status == "ahead":
+            self._update_status_label.config(text=t("gui.update.ahead"))
+        elif status == "up_to_date":
+            self._update_status_label.config(text=t("gui.update.up_to_date"))
+        elif status == "update_available":
+            self._pending_update_summary = result.get("summary", "")
+            self._update_status_label.config(
+                text=t("gui.update.available", count=result.get("commits", 0)))
+            self._install_update_btn.pack(side="left", padx=(8, 0), ipady=4)
+        else:
+            self._update_status_label.config(
+                text=t("gui.update.error", msg=result.get("message", status or "")))
+
+    def _on_install_update(self):
+        from tkinter import messagebox
+        if not messagebox.askyesno(
+            t("gui.update.confirm_title"),
+            t("gui.update.confirm_body", summary=self._pending_update_summary),
+        ):
+            return
+        self._check_update_btn.config(state="disabled")
+        self._install_update_btn.config(state="disabled")
+        self._update_status_label.config(text=t("gui.update.installing"))
+
+        def worker():
+            from src import update_checker
+            result = update_checker.install_update()
+            try:
+                self.root.after(0, self._on_install_update_done, result)
+            except (RuntimeError, tk.TclError):
+                pass  # 視窗已關閉，結果沒人要了
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _on_install_update_done(self, result: dict):
+        from tkinter import messagebox
+        self._check_update_btn.config(state="normal")
+        status = result.get("status")
+
+        if status == "updated":
+            self._install_update_btn.pack_forget()
+            self._update_status_label.config(
+                text=t("gui.update.updated", commit=result.get("commit", "")))
+            messagebox.showinfo(
+                t("gui.update.done_title"), t("gui.update.done_body"))
+        else:
+            self._install_update_btn.config(state="normal")
+            self._update_status_label.config(
+                text=t("gui.update.error", msg=result.get("message", status or "")))
+
     def _apply_settings(self):
         """套用「設定」tab 上直接可見的欄位（下載／命名）。外觀、識別各自有獨立彈出視窗即時套用。"""
         self._retry_count = 0 if self._retry_infinite_var.get() else self._retry_count_var.get()
@@ -755,6 +881,7 @@ class App:
         self._fname_index = self._fname_index_var.get()
         self._fname_book_name = self._fname_book_var.get()
         self._fname_separator = self._fname_sep_var.get() or " "
+        self._convert_traditional = self._convert_traditional_var.get()
         new_lang = self._selected_lang_code()
         lang_changed = new_lang != self._lang_saved_code
         self._save_config({
@@ -763,6 +890,7 @@ class App:
             "filename_index": self._fname_index,
             "filename_book_name": self._fname_book_name,
             "filename_separator": self._fname_separator,
+            "convert_traditional": self._convert_traditional,
             "language": new_lang,
         })
         self._lang_saved_code = new_lang
@@ -1272,7 +1400,8 @@ class App:
             args=(self._aid, self._book_name, selected, output_dir, self.msg_queue,
                   self._retry_count, self._retry_delay,
                   self._fname_index, self._fname_book_name, self._fname_separator),
-            kwargs={"skip_event": self._skip_event},
+            kwargs={"skip_event": self._skip_event,
+                    "convert_traditional": self._convert_traditional},
             daemon=True,
         ).start()
 
@@ -1312,7 +1441,8 @@ class App:
         self.progress_bar["value"] = 0
         self.progress_bar["maximum"] = len(vols)
         self._set_status(f"處理中... 共 {len(vols)} 卷", "info")
-        kwargs = {"skip_event": self._skip_event}
+        kwargs = {"skip_event": self._skip_event,
+                  "convert_traditional": self._convert_traditional}
         if max_attempts is not None:
             kwargs["max_attempts"] = max_attempts
         threading.Thread(

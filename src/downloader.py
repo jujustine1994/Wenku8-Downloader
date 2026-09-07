@@ -100,13 +100,13 @@ def _fetch_best_text(aid: str, vid: int,
 def download_volume(aid: str, vid: int, filepath: str,
                     retry_count: int = RETRY_COUNT,
                     retry_delay: float = RETRY_DELAY,
-                    skip_event=None) -> bool:
+                    skip_event=None, convert_traditional: bool = True) -> bool:
     if skip_event and skip_event.is_set():
         return False
     text = _fetch_best_text(aid, vid, retry_count, retry_delay, skip_event)
     if text is None:
         return False
-    converted = convert_to_traditional(text)
+    converted = convert_to_traditional(text) if convert_traditional else text
     os.makedirs(os.path.dirname(filepath), exist_ok=True)
     with open(filepath, "w", encoding="utf-8") as f:
         f.write(converted)
@@ -127,7 +127,8 @@ REPAIR_STALE_LIMIT = 5  # 連續幾輪沒有改善才放棄（避免真的修不
 def repair_volume(aid: str, vid: int, filepath: str,
                   retry_count: int = RETRY_COUNT,
                   retry_delay: float = RETRY_DELAY,
-                  skip_event=None, max_attempts: int | None = None) -> bool | None:
+                  skip_event=None, max_attempts: int | None = None,
+                  convert_traditional: bool = True) -> bool | None:
     """
     重複整輪重新下載（utf-8 + gbk 挑亂碼較少者），直到完全無亂碼、或
     skip_event 被觸發才停止。retry_count 為正數（有限重試）時，額外會在
@@ -168,7 +169,7 @@ def repair_volume(aid: str, vid: int, filepath: str,
     if best_text is None:
         return None
 
-    converted = convert_to_traditional(best_text)
+    converted = convert_to_traditional(best_text) if convert_traditional else best_text
     os.makedirs(os.path.dirname(filepath), exist_ok=True)
     with open(filepath, "w", encoding="utf-8") as f:
         f.write(converted)
@@ -221,7 +222,7 @@ def run_download_all(aid: str, book_name: str, volumes: list[dict],
                      index_fmt: str = "padded",
                      include_book_name: bool = True,
                      separator: str = " ",
-                     skip_event=None) -> None:
+                     skip_event=None, convert_traditional: bool = True) -> None:
     total = len(volumes)
     success = 0
     fail_volumes: list[dict] = []
@@ -243,7 +244,8 @@ def run_download_all(aid: str, book_name: str, volumes: list[dict],
             filepath = build_filepath(output_dir, book_name, seq_index, vol["name"], seq_total,
                                       index_fmt, include_book_name, separator,
                                       index_prefix=prefix)
-            ok = download_volume(aid, vol["vid"], filepath, retry_count, retry_delay, skip_event)
+            ok = download_volume(aid, vol["vid"], filepath, retry_count, retry_delay,
+                                 skip_event, convert_traditional)
             if ok:
                 if skip_event and skip_event.is_set():
                     skip_event.clear()
@@ -297,7 +299,8 @@ def run_repair_all(aid: str, book_name: str, volumes: list[dict],
                    index_fmt: str = "padded",
                    include_book_name: bool = True,
                    separator: str = " ",
-                   skip_event=None, max_attempts: int | None = None) -> None:
+                   skip_event=None, max_attempts: int | None = None,
+                   convert_traditional: bool = True) -> None:
     total = len(volumes)
     success = 0
     fail_volumes: list[dict] = []
@@ -320,7 +323,7 @@ def run_repair_all(aid: str, book_name: str, volumes: list[dict],
                                       index_fmt, include_book_name, separator,
                                       index_prefix=prefix)
             result = repair_volume(aid, vol["vid"], filepath, retry_count, retry_delay,
-                                   skip_event, max_attempts)
+                                   skip_event, max_attempts, convert_traditional)
             skipped = skip_event is not None and skip_event.is_set()
             if skipped:
                 skip_event.clear()

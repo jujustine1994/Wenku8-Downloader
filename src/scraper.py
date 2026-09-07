@@ -2,7 +2,7 @@ import re
 import urllib.parse
 from bs4 import BeautifulSoup
 from curl_cffi import requests as cf_requests
-from src.config import CATALOG_BASE_URL
+from src.config import CATALOG_BASE_URL, BOOK_BASE_URL, NOVEL_BASE_URL
 from src.sitedata import MAIN_VOLUME_RE, TITLE_TRIM_RE, UNKNOWN_BOOK_TITLE
 
 # 本模組解析 wenku8 回傳的 HTML。網站是簡體站，樣式裡的簡體字是**比對用的
@@ -62,9 +62,32 @@ def fetch_catalog(aid: str) -> BeautifulSoup:
     url = f"{CATALOG_BASE_URL}?aid={aid}"
     # impersonate="chrome120" 模擬 Chrome TLS 指紋，繞過 Cloudflare Bot Management
     # 傳 resp.content（bytes）給 BeautifulSoup，讓 lxml 從 meta charset 自動偵測 GBK/UTF-8
-    resp = _get_session().get(url, impersonate="chrome120", timeout=30)
+    try:
+        resp = _get_session().get(url, impersonate="chrome120", timeout=30)
+        resp.raise_for_status()
+        return BeautifulSoup(resp.content, "lxml")
+    except Exception:
+        # reader.php 曾在 2026-09 被 Cloudflare 升級成 JS challenge（cf-mitigated:
+        # challenge），一律 403。備援改抓一般網頁 /novel/{分類}/{aid}/index.htm，
+        # 該頁未受同等防護且卷/章節表格結構相同（parse_volumes 兩種格式都吃）。
+        return _fetch_catalog_fallback(aid)
+
+
+def _fetch_catalog_fallback(aid: str) -> BeautifulSoup:
+    book_url = f"{BOOK_BASE_URL}/{aid}.htm"
+    resp = _get_session().get(book_url, impersonate="chrome120", timeout=30)
     resp.raise_for_status()
-    return BeautifulSoup(resp.content, "lxml")
+    book_soup = BeautifulSoup(resp.content, "lxml")
+
+    link = book_soup.find("a", href=re.compile(rf"/novel/\d+/{aid}/"))
+    if not link:
+        raise ValueError("Cannot locate category for fallback index page")
+    category = re.search(rf"/novel/(\d+)/{aid}/", link["href"]).group(1)
+
+    index_url = f"{NOVEL_BASE_URL}/{category}/{aid}/index.htm"
+    resp2 = _get_session().get(index_url, impersonate="chrome120", timeout=30)
+    resp2.raise_for_status()
+    return BeautifulSoup(resp2.content, "lxml")
 
 
 def parse_book_title(soup: BeautifulSoup) -> str:
@@ -101,6 +124,17 @@ def parse_volumes(soup: BeautifulSoup) -> list[dict]:
             }
             volume_index += 1
             found_first_chapter = False
+
+            # index.htm 版型：卷標題 td 直接帶 vid="63835" 屬性，數值等同
+            # reader.php 版型「第一章 cid - 1」算出來的 vid，可省去往下找連結
+            header_vid = cells[0].get("vid")
+            if header_vid and header_vid.isdigit():
+                volumes.append({
+                    **current_volume,
+                    "first_cid": int(header_vid) + 1,
+                    "vid": int(header_vid),
+                })
+                found_first_chapter = True
             continue
 
         # First chapter link under current volume
