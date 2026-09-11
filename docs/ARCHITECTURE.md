@@ -57,6 +57,17 @@ root/
 | `src/main.py` | tkinter `App` 類別：三個分頁（下載/轉換/設定）、Preview 分類視窗、queue 輪詢與按鈕狀態機、下載完自動接續修復鏈 |
 | `launcher.ps1` | Python/uv 檢查、首次安裝說明、venv 建立、啟動 |
 
+## 簡轉繁兩層邏輯（src/converter.py）
+
+轉換分兩層，順序：原文 → OpenCC → `_OVERRIDES` → 輸出。
+
+1. **OpenCC `s2twp`**：詞庫式轉換，會依上下文判斷同一簡體字對應的繁體字（如「頭發→頭髮」「出發→出發」），但仍有已知誤轉（如把小說常用的「只是」誤判成量詞「一隻貓」的「隻」、把「范先生」的姓氏誤判成「範」、「台」被轉成公文正式異體字「臺／檯」）。
+2. **`_OVERRIDES`**：OpenCC 轉完後再跑一輪**無上下文的全域字串 `.replace()`**，把已知誤轉結果強制改回來。目前 5 條：`賓士→奔馳`、`隻→只`、`臺→台`、`檯→台`、`範→范`。這是刻意選擇「寧可不翻、不要錯翻」——例如「隻→只」這條也會連帶把真的該用「隻」的「一隻貓」改成「一只貓」，是已知且接受的副作用。
+
+**為什麼不直接改 OpenCC 本身、而要疊加這層：** `opencc-python-reimplemented` 套件的 `OpenCC(conversion)` 建構子寫死只接受設定檔「名稱」字串（如 `"s2twp"`），程式內部直接組路徑讀套件自己資料夾裡的 json/詞典（`venv/Lib/site-packages/opencc/opencc.py` 的 `os.path.join(os.path.dirname(__file__), CONFIG_DIR, config)`），**不像原版 C++ OpenCC 那樣開放傳入自訂設定檔或自訂詞典**。就算直接改 `venv/Lib/site-packages/opencc/dictionary/*.txt`，`venv/` 也不進版控，換機器或重新 `uv pip install` 就會被覆蓋消失。`_OVERRIDES` 寫在 `src/converter.py`（會進版控、跟著發布）是目前唯一能持久生效的修正方式。
+
+新增 override 前，可用專案的 venv 直接跑 `OpenCC('s2twp').convert(...)` 測試候選字詞的轉換結果，確認是否誤轉、副作用範圍多大，再決定要不要加。
+
 ## 執行流程
 
 ```
