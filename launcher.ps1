@@ -6,6 +6,20 @@ $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 Set-Location $ScriptDir
 
 # ======================================
+# venv 位置（刻意放在專案資料夾外）
+# ======================================
+# 這個專案在 Documents\Code 底下，而 Google Drive 桌面版正在備份整個
+# Documents\Code（2026-09-21 從 root_preference_sqlite.db 的 roots 表確認，
+# root_id=4）。venv 跟著被同步會出事：site-packages 底下的目錄被設成唯讀
+# → uv 換套件版本時 RemoveDirectory 一律回 ERROR_ACCESS_DENIED
+# （os error 5 存取被拒）；另外會生出一堆 "xxx (1).py" 影子檔，套件被同步
+# 工具切成兩半（實測 idna 被刪到只剩影子檔，變成 namespace package）。
+# Drive 桌面版不支援排除子資料夾，只能整個資料夾勾或不勾，所以改成把 venv
+# 放到同步範圍外的集中目錄。詳見 windows-tool.md「venv 位置」。
+$VenvPath   = Join-Path $env:USERPROFILE "venvs\Wenku8 Downloader"
+$VenvPython = Join-Path $VenvPath "Scripts\python.exe"
+
+# ======================================
 # 執行紀錄（必加，須放在 trap 之前，閃退才記得到）
 # 完整規則見 windows-tool.md「執行紀錄」；範本說明見 windows-tool-templates.md「執行紀錄範本」
 # ======================================
@@ -75,7 +89,7 @@ if (-not (Get-Command uv -ErrorAction SilentlyContinue)) {
 # [2/2] 檢查虛擬環境
 # ======================================
 Write-Host "[2/2] 檢查虛擬環境..." -ForegroundColor Cyan
-if (-not (Test-Path "venv")) {
+if (-not (Test-Path $VenvPython)) {
     Write-Host ""
     Write-Host "  ============================================" -ForegroundColor Cyan
     Write-Host "    Wenku8 Downloader - 首次安裝說明" -ForegroundColor Cyan
@@ -103,14 +117,15 @@ if (-not (Test-Path "venv")) {
     $ans = Read-Host "[WARNING] 找不到虛擬環境，現在建立並安裝套件？[Y/n] - 直接按 Enter 代表同意"
     if ($ans -eq "" -or $ans -ieq "Y") {
         Write-Host "[INFO] 建立虛擬環境中（電腦若沒有 Python 會自動下載，約 20MB）..." -ForegroundColor Gray
-        uv venv venv --python 3.13
+        New-Item -ItemType Directory -Force (Split-Path $VenvPath) | Out-Null
+        uv venv "$VenvPath" --python 3.13
         if ($LASTEXITCODE -ne 0) {
             Write-Log "建立虛擬環境失敗（uv venv 回傳 $LASTEXITCODE）" "ERROR"
             Write-Host "[ERROR] 建立虛擬環境失敗，多半是下載 Python 時連不上網路。請確認網路連線後重新執行。" -ForegroundColor Red
             Read-Host "按 Enter 關閉"; exit 1
         }
         Write-Host "[INFO] 安裝套件中..." -ForegroundColor Gray
-        uv pip install -r requirements.txt --python venv\Scripts\python.exe
+        uv pip install -r requirements.txt --python "$VenvPython"
         if ($LASTEXITCODE -ne 0) {
             Write-Log "套件安裝失敗（uv pip install 回傳 $LASTEXITCODE）" "ERROR"
             Write-Host "[ERROR] 套件安裝失敗，請確認網路連線後重新執行。" -ForegroundColor Red
@@ -123,14 +138,14 @@ if (-not (Test-Path "venv")) {
 } else {
     Write-Host "[OK] 虛擬環境已就緒，檢查套件更新..." -ForegroundColor Green
     # 清理損壞的 dist-info（METADATA 檔遺失時 uv 會拒絕安裝）
-    $broken = Get-ChildItem "venv\Lib\site-packages" -Directory -Filter "*dist-info" -ErrorAction SilentlyContinue | Where-Object {
+    $broken = Get-ChildItem (Join-Path $VenvPath "Lib\site-packages") -Directory -Filter "*dist-info" -ErrorAction SilentlyContinue | Where-Object {
         -not (Test-Path (Join-Path $_.FullName "METADATA"))
     }
     foreach ($dir in $broken) {
         Write-Host "[INFO] 清理損壞的套件資訊：$($dir.Name)" -ForegroundColor Yellow
         Remove-Item -Recurse -Force $dir.FullName
     }
-    uv pip install -r requirements.txt --python venv\Scripts\python.exe -q
+    uv pip install -r requirements.txt --python "$VenvPython" -q
     if ($LASTEXITCODE -ne 0) {
         # uv 刪不掉唯讀目錄：Windows 的 RemoveDirectory 對唯讀目錄一律回
         # ERROR_ACCESS_DENIED，uv 會報 "os error 5 存取被拒"。檔案同步工具
@@ -139,7 +154,7 @@ if (-not (Test-Path "venv")) {
         # 上面那段只清「缺 METADATA 的 dist-info」，擋不到這個，所以改成
         # 失敗才修、修完重試一次：平常一毛錢不花，出事才動作。
         Write-Host "[INFO] 套件更新失敗，清除唯讀屬性與同步殘留檔後重試..." -ForegroundColor Yellow
-        $sp = "venv\Lib\site-packages"
+        $sp = Join-Path $VenvPath "Lib\site-packages"
         Get-ChildItem $sp -Recurse -Directory -ErrorAction SilentlyContinue |
             Where-Object { $_.Attributes -band [IO.FileAttributes]::ReadOnly } |
             ForEach-Object {
@@ -147,7 +162,7 @@ if (-not (Test-Path "venv")) {
             }
         Get-ChildItem $sp -Recurse -File -Filter "* (1).*" -ErrorAction SilentlyContinue |
             ForEach-Object { Remove-Item -LiteralPath $_.FullName -Force -ErrorAction SilentlyContinue }
-        uv pip install -r requirements.txt --python venv\Scripts\python.exe -q
+        uv pip install -r requirements.txt --python "$VenvPython" -q
         if ($LASTEXITCODE -ne 0) {
             Write-Host "[WARN] 套件更新仍失敗，將以現有套件繼續啟動。" -ForegroundColor Yellow
             Write-Log "套件更新失敗（清除唯讀屬性後重試仍失敗）" "WARN"
