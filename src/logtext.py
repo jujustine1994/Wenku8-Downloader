@@ -27,6 +27,8 @@ LOG_TEXT: dict[str, str] = {
     # ── 錯誤行：只記 exception 類型 + HTTP status code + 重試次數 ──
     # 絕不記 URL / response 全文 / f"...{e}"（見 windows-tool.md「錯誤行怎麼寫」）
     "err.fetch":   "vid={vid} charset={charset} -> {etype}: HTTP {status} | 重試 {retry}",
+    # 限流跟一般錯誤分開記：它不吃 retry_count，而且要看得出退避等了多久
+    "err.throttled": "vid={vid} charset={charset} -> HTTP 429 限流 | 第 {attempt}/{limit} 次 | 退避 {wait}s",
     "err.volume":  "{book} {index} -> {etype}: HTTP {status}",
     "err.catalog": "載入目錄 aid={aid} -> {etype}: HTTP {status}",
     # manifest 讀寫失敗只記類型，絕不記檔案內容（裡面有書名、卷名、路徑）

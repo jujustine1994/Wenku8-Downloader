@@ -10,7 +10,7 @@ from tkinter import ttk, scrolledtext
 
 from src import i18n
 from src.i18n import t
-from src.config import OUTPUT_DIR, RETRY_COUNT, RETRY_DELAY
+from src.config import OUTPUT_DIR, RETRY_COUNT, RETRY_DELAY, REQUEST_INTERVAL
 from src import manifest
 from src.scraper import (
     parse_aid_from_url, parse_vid_from_url, parse_cid_from_url,
@@ -219,6 +219,8 @@ class App:
         self._path_var = tk.StringVar()
         self._retry_count = int(_cfg.get("retry_count", RETRY_COUNT))
         self._retry_delay = int(_cfg.get("retry_delay", RETRY_DELAY))
+        # 送出間隔：對付 wenku8 的 HTTP 429 限流，見 src/ratelimit.py
+        self._request_interval = float(_cfg.get("request_interval", REQUEST_INTERVAL))
         self._fname_index = _cfg.get("filename_index", "padded")
         self._fname_book_name = bool(_cfg.get("filename_book_name", True))
         self._fname_separator = _cfg.get("filename_separator", " ")
@@ -748,6 +750,20 @@ class App:
         ).pack(side="left", padx=(8, 4))
         ttk.Label(row2, text="秒", font=F).pack(side="left")
 
+        row2b = ttk.Frame(content)
+        row2b.pack(fill="x", pady=(8, 0))
+        ttk.Label(row2b, text="送出間隔：", font=F).pack(side="left")
+        self._request_interval_var = tk.DoubleVar(value=self._request_interval)
+        ttk.Spinbox(
+            row2b, from_=0, to=30, increment=0.5,
+            textvariable=self._request_interval_var, width=5, font=F
+        ).pack(side="left", padx=(8, 4))
+        ttk.Label(
+            row2b,
+            text="秒（每次連線之間至少等這麼久，調大可減少被網站限流）",
+            font=FH,
+        ).pack(side="left")
+
         row3 = ttk.Frame(content)
         row3.pack(fill="x", pady=(12, 0))
         self._convert_traditional_var = tk.BooleanVar(value=self._convert_traditional)
@@ -961,6 +977,7 @@ class App:
         """套用「設定」tab 上直接可見的欄位（下載／命名）。外觀、識別各自有獨立彈出視窗即時套用。"""
         self._retry_count = 0 if self._retry_infinite_var.get() else self._retry_count_var.get()
         self._retry_delay = self._retry_delay_var.get()
+        self._request_interval = max(0.0, float(self._request_interval_var.get()))
         self._fname_index = self._fname_index_var.get()
         self._fname_book_name = self._fname_book_var.get()
         self._fname_separator = self._fname_sep_var.get() or " "
@@ -970,6 +987,7 @@ class App:
         self._save_config({
             "retry_count": self._retry_count,
             "retry_delay": self._retry_delay,
+            "request_interval": self._request_interval,
             "filename_index": self._fname_index,
             "filename_book_name": self._fname_book_name,
             "filename_separator": self._fname_separator,
@@ -1024,6 +1042,7 @@ class App:
         self._retry_infinite_var.set(retry_infinite)
         self._on_infinite_toggle()
         self._retry_delay_var.set(self._retry_delay)
+        self._request_interval_var.set(self._request_interval)
         self._fname_index_var.set(self._fname_index)
         self._fname_book_var.set(self._fname_book_name)
         self._fname_sep_var.set(self._fname_separator)
@@ -1777,7 +1796,8 @@ class App:
                   self._retry_count, self._retry_delay,
                   self._fname_index, self._fname_book_name, self._fname_separator),
             kwargs={"skip_event": self._skip_event,
-                    "convert_traditional": self._convert_traditional},
+                    "convert_traditional": self._convert_traditional,
+                    "request_interval": self._request_interval},
             daemon=True,
         ).start()
 
@@ -1819,7 +1839,8 @@ class App:
         self.progress_bar["maximum"] = len(vols)
         self._set_status(f"處理中... 共 {len(vols)} 卷", "info")
         kwargs = {"skip_event": self._skip_event,
-                  "convert_traditional": self._convert_traditional}
+                  "convert_traditional": self._convert_traditional,
+                  "request_interval": self._request_interval}
         if max_attempts is not None:
             kwargs["max_attempts"] = max_attempts
         threading.Thread(

@@ -4,8 +4,11 @@ import time
 import queue
 from curl_cffi import requests as cf_requests
 from src import manifest
-from src.config import DOWNLOAD_BASE_URL, RETRY_COUNT, RETRY_DELAY
+from src.config import (
+    DOWNLOAD_BASE_URL, RETRY_COUNT, RETRY_DELAY, REQUEST_INTERVAL,
+)
 from src.converter import convert_to_traditional
+from src.ratelimit import RateLimiter, retry_after_from
 from src.verify import verify_file
 from src.scraper import format_index_token
 from src.logutil import _write_log, _write_log_header, _extract_status
@@ -23,18 +26,66 @@ def _get_session() -> cf_requests.Session:
     return _session
 
 
+# 被限流時單一請求最多重試幾次。跟 retry_count 分開：429 是暫時性的，
+# 不該跟「這一卷真的抓不到」共用同一個次數預算。
+#
+# 10 次搭配指數退避（5→10→20→40→60…上限 60 秒）最壞情況約 6 分鐘，
+# 之後才放棄那一卷進修復清單。對「成功優先、慢一點可接受」是合理的上限。
+_MAX_THROTTLE_RETRIES = 10
+
+# 整批共用的送出節流閘。刻意用模組層級單例，跟上面的 _session 同一個模式：
+# 限流是全域的，閘門也必須是全域的，而且 App 一次只跑一批下載/修復。
+# 一路把 limiter 當參數傳進 _fetch_bytes 要穿過 4 層已經很長的簽章，不划算。
+_limiter: RateLimiter | None = None
+
+
+def get_limiter() -> RateLimiter:
+    global _limiter
+    if _limiter is None:
+        _limiter = RateLimiter(REQUEST_INTERVAL)
+    return _limiter
+
+
+def reset_limiter(interval: float | None = None) -> RateLimiter:
+    """每批任務開始時重設，並套用使用者目前的間隔設定。
+
+    重設是必要的：上一批累積的懲罰不該帶到下一批——使用者按下「下載」時
+    通常已經隔了一段時間，限流視窗多半早就過了，帶著舊懲罰只是白等。
+    """
+    global _limiter
+    _limiter = RateLimiter(REQUEST_INTERVAL if interval is None else interval)
+    return _limiter
+
+
 def _fetch_bytes(aid: str, vid: int, charset: str,
                  retry_count: int, retry_delay: float,
                  skip_event=None, max_attempts: int | None = None) -> bytes | None:
     """retry_count <= 0 表示無限重試，直到成功或 skip_event 被觸發。
     max_attempts 有設定時，即使無限重試模式也會在達到次數上限後放棄
-    （自動修復流程用來避免真的下載不到的卷讓程式無限空轉；手動操作不傳這個參數）。"""
+    （自動修復流程用來避免真的下載不到的卷讓程式無限空轉；手動操作不傳這個參數）。
+
+    ## 限流（HTTP 429）跟其他錯誤分開處理
+
+    2026-09-21 實測：一次 57 卷的任務出現 115 次 429。429 是**暫時性**的，
+    跟「這一卷抓不到」是兩回事，所以：
+
+    - **不吃 retry_count**。原本 429 撞 3 次就判定整卷失敗，然後進修復清單再
+      撞一次，等於拿限流當永久錯誤。改成有自己的 `_MAX_THROTTLE_RETRIES`。
+    - **不睡 retry_delay**，改由 `ratelimit` 的閘門排隊。固定 2 秒對 429 遠遠
+      不夠，等於持續敲門讓限流續命。
+    - **退避是整批共用的**（見 `src/ratelimit.py`）。限流是全域的，一個 429
+      應該讓整批慢下來，而不是每卷各自去撞同一道牆。
+    """
     url = f"{DOWNLOAD_BASE_URL}?aid={aid}&vid={vid}&charset={charset}"
     infinite = retry_count <= 0
-    attempt = 0
+    limiter = get_limiter()
+    hard_attempts = 0      # 非限流的失敗次數，只有這個吃 retry_count
+    throttle_attempts = 0  # 被限流的次數，有自己的上限
     while True:
-        attempt += 1
         if skip_event and skip_event.is_set():
+            return None
+        # 所有送出都要過閘門。等待期間可被「跳過目前卷」打斷。
+        if not limiter.wait(skip_event):
             return None
         resp = None
         try:
@@ -43,18 +94,35 @@ def _fetch_bytes(aid: str, vid: int, charset: str,
             # 回應內容不應是 HTML（< 開頭 = 錯誤頁面）
             if len(resp.content) < 50 or resp.content[:5].strip().startswith(b"<"):
                 raise ValueError("Response is HTML error page, not TXT")
+            limiter.ok()
             return resp.content
         except Exception as e:
             # 只記類型 + status code + 重試次數，絕不記 url（見 windows-tool.md「錯誤行怎麼寫」）
             status = resp.status_code if resp is not None else _extract_status(e)
+
+            if status == 429:
+                throttle_attempts += 1
+                limiter.throttled(retry_after_from(resp))
+                _write_log(log_t("err.throttled", vid=vid, charset=charset,
+                                 attempt=throttle_attempts,
+                                 limit=_MAX_THROTTLE_RETRIES,
+                                 wait=int(limiter.penalty)), "WARN")
+                if throttle_attempts >= _MAX_THROTTLE_RETRIES:
+                    return None
+                if skip_event and skip_event.is_set():
+                    return None
+                continue  # 不睡 retry_delay，閘門已經把等待時間排好了
+
+            hard_attempts += 1
+            limiter.failed()
             retry_label = (log_t("retry.infinite") if infinite
-                           else f"{attempt}/{retry_count}")
+                           else f"{hard_attempts}/{retry_count}")
             _write_log(log_t("err.fetch", vid=vid, charset=charset,
                              etype=type(e).__name__, status=status,
                              retry=retry_label), "ERROR")
-            if not infinite and attempt >= retry_count:
+            if not infinite and hard_attempts >= retry_count:
                 return None
-            if max_attempts is not None and attempt >= max_attempts:
+            if max_attempts is not None and hard_attempts >= max_attempts:
                 return None
             if skip_event and skip_event.is_set():
                 return None
@@ -276,11 +344,15 @@ def run_download_all(aid: str, book_name: str, volumes: list[dict],
                      index_fmt: str = "padded",
                      include_book_name: bool = True,
                      separator: str = " ",
-                     skip_event=None, convert_traditional: bool = True) -> None:
+                     skip_event=None, convert_traditional: bool = True,
+                     request_interval: float | None = None) -> None:
     total = len(volumes)
     success = 0
     fail_volumes: list[dict] = []
     garbled_volumes: list[dict] = []
+
+    # 整批共用一個節流閘，上一批的懲罰不帶過來
+    reset_limiter(request_interval)
 
     retry_label_hdr = (log_t("retry.infinite") if retry_count <= 0
                        else f"{retry_count}x")
@@ -368,11 +440,14 @@ def run_repair_all(aid: str, book_name: str, volumes: list[dict],
                    include_book_name: bool = True,
                    separator: str = " ",
                    skip_event=None, max_attempts: int | None = None,
-                   convert_traditional: bool = True) -> None:
+                   convert_traditional: bool = True,
+                   request_interval: float | None = None) -> None:
     total = len(volumes)
     success = 0
     fail_volumes: list[dict] = []
     garbled_volumes: list[dict] = []
+
+    reset_limiter(request_interval)
 
     retry_label_hdr = (log_t("retry.infinite") if retry_count <= 0
                        else f"{retry_count}x")
