@@ -1767,6 +1767,13 @@ class App:
         output_dir = self._ensure_output_dir()
         if output_dir is None:
             return
+        # 書號與來源網址在這裡記一次。`_make_plan()` 也會記，但它只在輸出資料夾
+        # **已經存在**時才跑得到（見 `_notify_existing_files()` 的前置檢查），
+        # 所以第一次下載到全新資料夾的路徑會整個跳過它——實測 57 卷下載完
+        # source_url 是空的就是這個洞。這裡是使用者確定要下載的時點，
+        # `_ensure_output_dir()` 也已經把資料夾建好了，補記最安全。
+        manifest.record_book_meta(output_dir, self._aid, self._book_name,
+                                  self._source_url)
         self.btn_download.config(state="disabled")
         self.btn_update.config(state="disabled")
         self.btn_load.config(state="disabled")
