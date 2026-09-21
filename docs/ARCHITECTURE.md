@@ -124,12 +124,52 @@ root/
 - **`manifest.py` 不可 import `downloader`**——`downloader` 會 import 它寫紀錄，
   反過來就是循環。算檔名一律由呼叫端傳 `build_path(vol)` callable 進來。
 
+## venv 位置
+
+**venv 不在專案資料夾裡**，而是在：
+
+```
+%USERPROFILE%\venvs\Wenku8 Downloader\
+```
+
+實際路徑：`C:\Users\CTH\venvs\Wenku8 Downloader\`
+
+**為什麼要搬出去**：這個專案在 `Documents\Code` 底下，Google Drive 桌面版正在
+備份整個 `Documents\Code`（2026-09-21 從
+`%LOCALAPPDATA%\Google\DriveFS\root_preference_sqlite.db` 的 `roots` 表確認，
+`root_id=4`）。venv 跟著被同步會出事：
+
+- `site-packages` 底下的目錄被設成唯讀 → uv 換套件版本時 `RemoveDirectory`
+  一律回 `ERROR_ACCESS_DENIED`（`os error 5 存取被拒`）
+- 產生大量 `xxx (1).py` 影子檔（同步工具的衝突命名）
+- 套件被切成兩半（實測 `idna` 被刪到只剩影子檔，變成 namespace package，
+  `idna.__file__` 是 `None`）
+
+Drive 桌面版**不支援排除子資料夾**，只能整個資料夾勾或不勾，而 `Documents\Code`
+底下有一半專案沒有 git remote、Drive 是它們唯一的備份，所以不能關掉備份，
+只能把 venv 搬到同步範圍外。
+
+**新機器或重裝時什麼都不用做**：`launcher.ps1` 會自己建。手動建的指令：
+
+```powershell
+uv venv "$env:USERPROFILE\venvs\Wenku8 Downloader" --python 3.13
+uv pip install -r requirements.txt --python "$env:USERPROFILE\venvs\Wenku8 Downloader\Scripts\python.exe"
+```
+
+要跑測試再補這一行（`launcher.ps1` 只裝 `requirements.txt`，
+不裝 `requirements_test.txt`，避免使用者裝到用不到的 pytest）：
+
+```powershell
+uv pip install -r requirements_test.txt --python "$env:USERPROFILE\venvs\Wenku8 Downloader\Scripts\python.exe"
+```
+
+
 ## 執行流程
 
 ```
 使用者雙擊 BAT
   → launcher.ps1 檢查 Python / uv / venv
-  → venv\Scripts\python.exe -m src.main
+  → %USERPROFILE%\venvs\Wenku8 Downloader\Scripts\python.exe -m src.main
   → 終端顯示 CTH banner
   → tkinter 視窗開啟（下載 / 轉換 / 設定 三個常駐分頁）
 

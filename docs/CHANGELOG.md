@@ -76,6 +76,40 @@
 
 ## 更新記錄
 
+### 2026-09-21 — 維護：venv 搬到專案資料夾外（`%USERPROFILE%\venvs\Wenku8 Downloader\`）
+
+`Documents\Code` 整個被 Google Drive 桌面版備份（從
+`%LOCALAPPDATA%\Google\DriveFS\root_preference_sqlite.db` 的 `roots` 表確認，
+`root_id=4`、`state=2`）。venv 放在專案裡就會跟著被同步，實測災情：
+
+- `site-packages` 底下的目錄被設成唯讀 → uv 換套件版本時 `RemoveDirectory`
+  一律回 `ERROR_ACCESS_DENIED`，uv 報 `os error 5 存取被拒`，套件更新整個失敗
+- 產生大量 `xxx (1).py` 影子檔（同步工具的衝突命名）
+- 套件被切成兩半（實測 `idna` 被刪到只剩影子檔，變成 namespace package）
+
+清查當下 13 個專案的 venv **全部**有唯讀目錄，其中 10 個是 100%；本專案是
+309/309 全數唯讀，另有 5 個影子檔。當天稍早才乾淨重建過的 3 個也已經在被感染中，**幾小時就中**，
+所以「清乾淨再重建」這種治標做法沒有用。
+
+Drive 桌面版不支援排除子資料夾，只能整個資料夾勾或不勾；而 `Documents\Code`
+底下有一半專案沒有 git remote、Drive 是它們唯一的備份，不能關掉備份。
+結論是把 venv 搬到同步範圍外。
+
+改動：
+
+- `launcher.ps1`：新增 `$VenvPath` / `$VenvPython` 兩個變數，venv 存在性檢查、
+  `uv venv`、`uv pip install --python`、site-packages 路徑、`Activate.ps1`
+  全部改用新路徑；建立前會先 `New-Item` 補出 `%USERPROFILE%\venvs\` 父目錄
+- `ARCHITECTURE.md`：新增「venv 位置」章節（為什麼搬、手動重建指令）
+- 專案內舊 venv 已刪除（先清唯讀屬性才刪得掉）
+
+`venv` **不能用 `mv` 搬**，`Scripts\*.exe` 內嵌絕對路徑，一定要重建。
+
+規則檔 `windows-tool.md` 同步新增「venv 位置」章節，以後新專案一律建在外面。
+
+驗證：測試 166 條全過，與搬移前一致
+
+
 ### 2026-09-14 — 維護：venv 改用 uv 管理的獨立 Python（不依賴系統 Python）
 
 原本 `venv` 是用 Microsoft Store 版 Python 3.13 建的（沙盒安裝，容易有套件裝了

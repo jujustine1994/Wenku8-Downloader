@@ -170,9 +170,9 @@ if (-not (Test-Path $VenvPython)) {
     }
 }
 
-. ".\venv\Scripts\Activate.ps1"
+. (Join-Path $VenvPath "Scripts\Activate.ps1")
 
-$pyVer = (& ".\venv\Scripts\python.exe" --version 2>&1 | Out-String).Trim()
+$pyVer = (& "$VenvPython" --version 2>&1 | Out-String).Trim()
 Write-Log "環境就緒 | $pyVer | $uvVer"
 
 Write-Host ""
