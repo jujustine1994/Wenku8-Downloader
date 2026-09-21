@@ -100,14 +100,14 @@ if (-not (Test-Path $VenvPython)) {
     Write-Host "    1. Python 虛擬環境（venv）" -ForegroundColor Yellow
     Write-Host "       讓這個工具有獨立乾淨的執行空間，不影響電腦其他程式" -ForegroundColor Gray
     Write-Host ""
-    Write-Host "    2. requests" -ForegroundColor Yellow
-    Write-Host "       負責連上 wenku8.net 抓取網頁內容" -ForegroundColor Gray
+    Write-Host "    2. curl_cffi" -ForegroundColor Yellow
+    Write-Host "       負責連上 wenku8.net 下載小說，會模擬瀏覽器避免被網站擋下" -ForegroundColor Gray
     Write-Host ""
     Write-Host "    3. beautifulsoup4 + lxml" -ForegroundColor Yellow
     Write-Host "       負責解析網頁的目錄結構，找出每一卷的章節" -ForegroundColor Gray
     Write-Host ""
-    Write-Host "    4. sv-ttk" -ForegroundColor Yellow
-    Write-Host "       讓程式介面套用 Windows 11 風格" -ForegroundColor Gray
+    Write-Host "    4. opencc" -ForegroundColor Yellow
+    Write-Host "       把網站的簡體中文自動轉成繁體" -ForegroundColor Gray
     Write-Host ""
     Write-Host "  全程只需要一直按 Enter 同意即可。" -ForegroundColor Green
     Write-Host "  如果有任何疑問，可以把這段說明貼給 AI 詢問。" -ForegroundColor Green
