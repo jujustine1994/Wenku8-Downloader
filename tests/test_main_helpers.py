@@ -2,7 +2,8 @@ import os
 import sys
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from src.main import resolve_output_dir, format_seq_ranges, describe_url
+from src.main import (resolve_output_dir, format_seq_ranges, describe_url,
+                      format_volume_summary)
 from src.config import OUTPUT_DIR
 
 
@@ -103,3 +104,44 @@ def test_describe_url_matches_what_load_actually_does():
         is_single = (parse_vid_from_url(url) is not None
                      or parse_cid_from_url(url) is not None)
         assert ("單卷" in describe_url(url)[0]) == is_single
+
+
+# ── format_volume_summary（「已有 N 卷」提示用）──
+#
+# 這組的重點是**數字不能對不上**。實測（aid=1861 抓前 10 卷）踩到：正式卷與
+# 外傳卷各自獨立編號，把兩邊的 seq_index 混在一起丟給 format_seq_ranges，
+# set() 去重後 10 個檔案顯示成「共 8 卷」。
+
+def _v(seq, category="main"):
+    return {"seq_index": seq, "category": category}
+
+
+def test_volume_summary_empty():
+    assert format_volume_summary([]) == ""
+
+
+def test_volume_summary_main_only():
+    assert format_volume_summary([_v(i) for i in range(1, 11)]) == "正式卷 1–10（共 10 卷）"
+
+
+def test_volume_summary_side_only():
+    assert format_volume_summary([_v(i, "side") for i in (1, 2, 3)]) == "外傳 1–3（共 3 卷）"
+
+
+def test_volume_summary_counts_both_categories():
+    """正式 1–8 + 外傳 1–2 是 10 卷，不是 8 卷。"""
+    vols = [_v(i) for i in range(1, 9)] + [_v(i, "side") for i in (1, 2)]
+    result = format_volume_summary(vols)
+    assert result == "正式卷 1–8、外傳 1–2（共 10 卷）"
+    assert "共 10 卷" in result
+
+
+def test_volume_summary_total_never_derived_from_ranges():
+    """兩個分類的編號完全重疊時，總數仍必須是實際卷數。"""
+    vols = [_v(1), _v(2), _v(1, "side"), _v(2, "side")]
+    assert format_volume_summary(vols).endswith("（共 4 卷）")
+
+
+def test_seq_ranges_without_count_suffix():
+    assert format_seq_ranges([1, 2, 3], with_count=False) == "1–3"
+    assert format_seq_ranges([1, 2, 3]) == "1–3（共 3 卷）"

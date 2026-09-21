@@ -95,7 +95,8 @@ def describe_url(url: str) -> tuple[str, str]:
     return f"▸ 整套目錄 · 書號 {aid}", "info"
 
 
-def format_seq_ranges(indexes: list[int], max_parts: int = 3) -> str:
+def format_seq_ranges(indexes: list[int], max_parts: int = 3,
+                      with_count: bool = True) -> str:
     """把卷序整理成人看得懂的短字串：[1,2,3,5] → "1–3、5（共 4 卷）"。
 
     連續段落收成區間，段數超過 max_parts 就截斷成「前幾段 等 N 卷」——50 卷
@@ -119,8 +120,33 @@ def format_seq_ranges(indexes: list[int], max_parts: int = 3) -> str:
     parts = [f"{a}–{b}" if a != b else str(a) for a, b in spans[:max_parts]]
     text = "、".join(parts)
     if len(spans) > max_parts:
-        return f"{text} 等 {len(nums)} 卷"
-    return f"{text}（共 {len(nums)} 卷）"
+        return f"{text} 等" if not with_count else f"{text} 等 {len(nums)} 卷"
+    return text if not with_count else f"{text}（共 {len(nums)} 卷）"
+
+
+def format_volume_summary(volumes: list[dict]) -> str:
+    """把一組卷整理成「正式卷 1–8、外傳 1–2（共 10 卷）」。
+
+    ⚠ **不能**把所有 seq_index 丟進 format_seq_ranges 一次算完：正式卷與外傳卷
+    是各自獨立編號的，兩邊的 1、2 是不同的卷。混在一起會被 set() 去重——實測
+    10 個檔案（正式 1–8＋外傳 1–2）會顯示成「共 8 卷」，數字直接對不上。
+
+    總數一律用實際卷數，不用區間裡的數字推算。
+    """
+    def seqs(cat_match):
+        return [v.get("seq_index", v.get("index", 0)) for v in volumes
+                if (v.get("category") == "side") is cat_match]
+
+    parts = []
+    main_seqs, side_seqs = seqs(False), seqs(True)
+    if main_seqs:
+        parts.append("正式卷 " + format_seq_ranges(main_seqs, with_count=False))
+    if side_seqs:
+        parts.append(f"{SIDE_INDEX_PREFIX} "
+                     + format_seq_ranges(side_seqs, with_count=False))
+    if not parts:
+        return ""
+    return "、".join(parts) + f"（共 {len(volumes)} 卷）"
 
 F  = ("Microsoft JhengHei", 12)
 FS = ("Microsoft JhengHei", 11)
@@ -1369,9 +1395,7 @@ class App:
             return
 
         need = plan["new"] + plan["incomplete"]
-        have_text = format_seq_ranges(
-            [v.get("seq_index", v.get("index", 0)) for v in have]
-        )
+        have_text = format_volume_summary(have)
         if not need:
             # 全部都在而且都完整：講一句就好，不必為了「需要下載 0 卷」跳視窗
             self._set_status(
