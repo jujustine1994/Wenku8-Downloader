@@ -23,6 +23,16 @@ HTTP 200 但內容不完整時，檔案是合法 UTF-8、也沒有 `�`，一�
 - 完整檔的最後錨點位置：第 1 卷 99.2%、第 57 卷 99.6%、第 21 卷 70.0%
   → `ANCHOR_TAIL_POSITION = 0.5` 對完整檔有充足餘裕
 
+## 樣本限制（動判定邏輯前務必先讀）
+
+所有觀察到的規律都只來自 **aid=1861 與 1832 兩本書**。每本小說的卷名、章節
+標題命名習慣本來就可能不同，站方版型也會改。所以這個模組的設計原則是：
+
+**任何「格式假設」都只能當候選，不能當必要條件。** 兩組錨點（純標題、卷名＋
+標題）並列計算、取命中高的那組，格式對不上的書會自動落到另一組或字數判定，
+而不是被判成斷檔。薄弱證據只能用來「確認完整」，不能用來「宣告損壞」——
+誤判損壞的代價是使用者整套重抓，比漏掉一個斷檔嚴重得多。
+
 ⚠ `NORMALIZE_MAP` 裡的符號是**拿去跟網站抓下來的內容比對的資料**，性質同
 `src/sitedata.py`，永遠不翻譯、不「順手改成繁體」。動了就會靜默誤判。
 """
@@ -77,12 +87,18 @@ def normalize(text: str) -> str:
     return "".join(out)
 
 
-def _anchor_titles(chapters: list[dict]) -> list[str]:
-    """正規化後長度 >= ANCHOR_MIN_LEN 的章節標題。短標題排除，會誤命中正文。"""
+def _anchor_titles(chapters: list[dict], convert=None) -> list[str]:
+    """純標題錨點：正規化後長度 >= ANCHOR_MIN_LEN 的章節標題。
+
+    短標題排除，它們會誤命中正文。這組跟 `_composite_anchors()` **並列當候選**，
+    由 `verify_volume()` 取命中高的那組，沒有誰優先——哪一組適用取決於那本書
+    的命名格式，而我們的樣本不足以斷定哪種格式比較常見。
+    """
+    conv = convert or (lambda s: s)
     seen: set[str] = set()
     anchors = []
     for c in chapters or []:
-        title = normalize(c.get("title", ""))
+        title = normalize(conv(c.get("title", "")))
         if len(title) < ANCHOR_MIN_LEN or title in seen:
             continue
         seen.add(title)
@@ -90,17 +106,57 @@ def _anchor_titles(chapters: list[dict]) -> list[str]:
     return anchors
 
 
-def _to_traditional(titles: list[str]) -> list[str]:
-    """把章節標題轉繁，用來比對已經轉過繁的磁碟檔案。
+def _composite_anchors(chapters: list[dict], volume_name: str,
+                       convert=None) -> list[str]:
+    """複合錨點：卷名 + 章節標題。**只是候選之一，不是格式定律。**
+
+    2026-09-21 在 aid=1832 與 1861 觀察到章節標題行長這樣：
+
+        　　{卷名} {章節標題}
+
+    標題行前綴了卷名，所以把兩者接起來當錨點，「序章」這種 2 字標題也會變成
+    十幾字的獨特字串，短標題誤命中正文的問題就消失了。實測命中率：aid=1832
+    第 1／5／10 卷、aid=1861 第 1 卷全部 100%，零重複命中。
+
+    ⚠ **樣本只有兩本書，不可以當成所有小說都成立。** 每本書的命名習慣不同，
+    站方版型也會改。所以 verify_volume() 把這組跟純標題錨點**並列當候選**，
+    取命中高的那組，而不是寫死一定用複合錨點——格式對不上的書如果被強制用
+    這組判定，完好的檔案會被判成斷檔。
+
+    拿不到卷名就回空 list，呼叫端自然會用另一組，這不是錯誤狀態。
+    """
+    conv = convert or (lambda s: s)
+    vol = normalize(conv(volume_name or ""))
+    if not vol:
+        return []
+    seen: set[str] = set()
+    anchors = []
+    for c in chapters or []:
+        title = normalize(conv(c.get("title", "")))
+        if not title:
+            continue
+        comp = vol + title
+        if comp in seen:
+            continue
+        seen.add(comp)
+        anchors.append(comp)
+    return anchors
+
+
+def _to_traditional(s: str) -> str:
+    """把單一標題/卷名轉繁，用來比對已經轉過繁的磁碟檔案。
 
     轉標題比轉全文便宜得多。OpenCC 載不起來時回原值——驗證退化成比較不準，
     但不該讓整個流程掛掉。
+
+    轉換要在**組合成錨點之前**對每一段各自做：先接起來再轉，OpenCC 會把
+    「卷名尾字＋標題首字」當成一個詞去查詞庫，轉出來可能跟實際檔案不同。
     """
     try:
         from src.converter import convert_to_traditional
-        return [normalize(convert_to_traditional(s)) for s in titles]
+        return convert_to_traditional(s)
     except Exception:
-        return titles
+        return s
 
 
 def _match(norm_text: str, anchors: list[str]) -> tuple[int, float]:
@@ -121,13 +177,17 @@ def _match(norm_text: str, anchors: list[str]) -> tuple[int, float]:
 
 def verify_volume(text: str, chapters: list[dict] | None = None,
                   median_chars: int | None = None,
-                  script: str | None = None) -> dict:
+                  script: str | None = None,
+                  volume_name: str = "") -> dict:
     """判定一卷的內容完整性。
 
     script 說明 text 目前是什麼字體，決定章節標題（一律簡體原文）要不要先轉繁：
         "zh-hans" / None  → 標題直接比
         "zh-hant"         → 標題轉繁再比
         "unknown"         → 兩種都試，取命中多的那種（回推來的舊檔用）
+
+    volume_name 有給的話會多算一組「卷名＋標題」的複合錨點當候選。給空字串
+    只會少一組候選，不會判錯——**不可以**把它當成必要條件。
 
     回傳 dict，status 為 "complete" / "suspect" / "garbled"。
     reason 是機器可讀代號（"anchor_ratio" / "anchor_tail" / "too_short"），
@@ -149,35 +209,46 @@ def verify_volume(text: str, chapters: list[dict] | None = None,
         return result
 
     norm_text = normalize(text)
-    anchors = _anchor_titles(chapters or [])
 
-    if len(anchors) >= ANCHOR_MIN_COUNT:
-        candidates = []
-        if script == "zh-hant":
-            candidates.append(_to_traditional(anchors))
-        elif script == "unknown":
-            candidates.append(anchors)
-            candidates.append(_to_traditional(anchors))
-        else:
-            candidates.append(anchors)
+    # 檔案目前是什麼字體，決定標題要不要先轉繁。unknown 兩種都試，取命中多的。
+    if script == "zh-hant":
+        converters = [_to_traditional]
+    elif script == "unknown":
+        converters = [None, _to_traditional]
+    else:
+        converters = [None]
 
-        best_hits, best_tail = 0, 0.0
-        for cand in candidates:
-            hits, tail = _match(norm_text, cand)
-            if hits > best_hits:
-                best_hits, best_tail = hits, tail
+    # 兩組錨點都算，取命中數最高的那組來判定。
+    #
+    # ⚠ 這裡**刻意不預設任何一種命名格式**。複合錨點（卷名＋標題）只在 aid=1832
+    # 與 1861 兩本書上驗證過，樣本太小，不能當定律——每本小說的命名習慣本來就
+    # 可能不同，站方版型也會變。寫死「一定用複合錨點」的話，遇到標題行沒有卷名
+    # 前綴的書，複合錨點會 0 命中，然後把完好的檔案判成斷檔。
+    #
+    # 「取命中最高」在這裡是**辨識格式**，不是放寬標準：真正的斷檔會讓兩組錨點
+    # 的尾段同時消失，命中率一起掉，選哪組都一樣會被抓出來。只有「格式對不上」
+    # 這種結構性不適用的情況才會被這條救回去，那正是我們要的。
+    candidates = []
+    for conv in converters:
+        for anchors in (_composite_anchors(chapters or [], volume_name, conv),
+                        _anchor_titles(chapters or [], conv)):
+            if anchors:
+                hits, tail = _match(norm_text, anchors)
+                candidates.append((len(anchors), hits, tail))
 
-        result["anchor_total"] = len(anchors)
-        result["anchor_hits"] = best_hits
-        result["tail_position"] = round(best_tail, 4)
-        ratio = best_hits / len(anchors)
-        if ratio < ANCHOR_HIT_RATIO:
-            result["status"] = "suspect"
-            result["reason"] = "anchor_ratio"
-        elif best_tail < ANCHOR_TAIL_POSITION:
-            result["status"] = "suspect"
-            result["reason"] = "anchor_tail"
-        return result
+    if candidates:
+        total, hits, tail = max(candidates, key=lambda r: r[1])
+        if total >= ANCHOR_MIN_COUNT:
+            result["anchor_total"] = total
+            result["anchor_hits"] = hits
+            result["tail_position"] = round(tail, 4)
+            if hits / total < ANCHOR_HIT_RATIO:
+                result["status"] = "suspect"
+                result["reason"] = "anchor_ratio"
+            elif tail < ANCHOR_TAIL_POSITION:
+                result["status"] = "suspect"
+                result["reason"] = "anchor_tail"
+            return result
 
     # 錨點不足（< ANCHOR_MIN_COUNT）：沒有足夠證據，退回字數判定
     threshold = FALLBACK_CHARS_FLOOR
@@ -191,7 +262,8 @@ def verify_volume(text: str, chapters: list[dict] | None = None,
 
 def verify_file(filepath: str, chapters: list[dict] | None = None,
                 median_chars: int | None = None,
-                script: str | None = None) -> dict | None:
+                script: str | None = None,
+                volume_name: str = "") -> dict | None:
     """讀檔後跑 verify_volume()。讀不到回 None，讓呼叫端自己決定怎麼歸類。
 
     用 errors="replace" 開檔：非 UTF-8 的舊檔會解出 `�`，正好被判成 garbled，
@@ -202,4 +274,4 @@ def verify_file(filepath: str, chapters: list[dict] | None = None,
             text = f.read()
     except OSError:
         return None
-    return verify_volume(text, chapters, median_chars, script)
+    return verify_volume(text, chapters, median_chars, script, volume_name)

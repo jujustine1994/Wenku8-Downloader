@@ -237,7 +237,8 @@ def _record_manifest(output_dir: str, aid: str, book_name: str, vol: dict,
     """
     try:
         script = manifest.script_for(convert_traditional)
-        verdict = verify_file(filepath, vol.get("chapters"), median, script)
+        verdict = verify_file(filepath, vol.get("chapters"), median, script,
+                              vol.get("name", ""))
         if verdict is None:
             return None
         manifest.record_volume(output_dir, aid, book_name, vol, filepath,

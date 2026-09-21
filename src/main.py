@@ -1148,7 +1148,7 @@ class App:
         id_canvas.configure(yscrollcommand=id_sb.set)
         id_canvas.grid(row=0, column=0, sticky="nsew")
         id_sb.grid(row=0, column=1, sticky="ns")
-        self._enable_wheel_scroll(id_canvas)
+        self._bind_wheel_to_dialog(win, id_canvas)
 
         id_kw_frame = ttk.Frame(id_canvas)
         id_kw_win = id_canvas.create_window((0, 0), window=id_kw_frame, anchor="nw")
@@ -1454,11 +1454,7 @@ class App:
         canvas.configure(yscrollcommand=sb.set)
         canvas.grid(row=0, column=0, sticky="nsew")
         sb.grid(row=0, column=1, sticky="ns")
-        # 同 Preview 視窗：綁在 Toplevel 上，關窗即銷毀，不用 bind_all 洩漏 handler
-        win.bind(
-            "<MouseWheel>",
-            lambda e: canvas.yview_scroll(int(-1 * (e.delta / 120)), "units"),
-        )
+        self._bind_wheel_to_dialog(win, canvas)
         body = ttk.Frame(canvas)
         body_win = canvas.create_window((0, 0), window=body, anchor="nw")
         body.bind("<Configure>",
@@ -1542,15 +1538,7 @@ class App:
         canvas.configure(yscrollcommand=sb.set)
         canvas.grid(row=0, column=0, sticky="nsew")
         sb.grid(row=0, column=1, sticky="ns")
-        # 這是每次載入都新建的暫時性對話框，不能用 _enable_wheel_scroll 的
-        # bind_all（那會在 App 生命週期內永久累積 handler，每開一次就多洩漏一個）。
-        # 改直接綁在對話框自己的 Toplevel 上：Tk 的事件分派會讓子元件上的
-        # <MouseWheel> 沿 bindtags 冒泡到所屬 Toplevel，所以綁在 win 上一樣收得到；
-        # 且 win.destroy() 時（_confirm / _cancel / 關窗都會呼叫）綁定會隨之銷毀，不洩漏。
-        win.bind(
-            "<MouseWheel>",
-            lambda e: canvas.yview_scroll(int(-1 * (e.delta / 120)), "units"),
-        )
+        self._bind_wheel_to_dialog(win, canvas)
 
         row_frame = ttk.Frame(canvas)
         row_win = canvas.create_window((0, 0), window=row_frame, anchor="nw")
@@ -1669,6 +1657,21 @@ class App:
     def _select_all(self, state: bool):
         for var in self._check_vars:
             var.set(state)
+
+    def _bind_wheel_to_dialog(self, win: tk.Toplevel, canvas: tk.Canvas):
+        """對話框專用的滾輪綁定。
+
+        **對話框不可以用 `_enable_wheel_scroll()`**——那個走 `root.bind_all`，
+        是 App 層級的永久綁定，從來不解綁；每開一次對話框就多洩漏一個 handler，
+        之後每次滾輪都要多跑一次已銷毀 canvas 的 `winfo_ismapped()`。
+
+        綁在對話框自己的 Toplevel 上就沒這問題：子元件的 `<MouseWheel>` 會沿
+        bindtags 冒泡到所屬 Toplevel，照樣收得到；`win.destroy()` 時綁定跟著消失。
+        """
+        win.bind(
+            "<MouseWheel>",
+            lambda e: canvas.yview_scroll(int(-1 * (e.delta / 120)), "units"),
+        )
 
     def _enable_wheel_scroll(self, canvas: tk.Canvas):
         """

@@ -155,3 +155,77 @@ def test_three_anchors_do_use_the_tail_check():
     result = verify_volume(text, _chapters(*titles))
     assert result["status"] == "suspect"
     assert result["reason"] == "anchor_tail"
+
+
+# ── 複合錨點（卷名＋標題）與「不預設命名格式」 ──
+#
+# 這幾條的重點不是「複合錨點會過」，而是**格式對不上時不可以被判成斷檔**。
+# 樣本只有兩本書，任何格式假設都只能當候選。
+
+VOL = "第一卷 剝離城阿德拉"
+BARE = ["序章", "第一章", "第二章", "第三章", "終章", "後記"]
+
+
+def _body_with_volume_prefix(vol, titles, padding=2000):
+    """aid=1832／1861 觀察到的版型：　　{卷名} {章節標題}"""
+    out = []
+    for tt in titles:
+        out.append(f"　　{vol} {tt}　　\n")
+        out.append("內" * padding + "\n")
+    return "".join(out)
+
+
+def _body_without_volume_prefix(titles, padding=2000):
+    """假想中另一種版型：標題行沒有卷名前綴。"""
+    out = []
+    for tt in titles:
+        out.append(f"　　{tt}　　\n")
+        out.append("內" * padding + "\n")
+    return "".join(out)
+
+
+def test_composite_anchors_rescue_bare_short_titles():
+    """光禿的 2–3 字標題單獨當錨點沒用，接上卷名就變得夠獨特。"""
+    text = _body_with_volume_prefix(VOL, BARE)
+    result = verify_volume(text, _chapters(*BARE), volume_name=VOL)
+    assert result["status"] == "complete"
+    assert result["anchor_total"] == len(BARE)      # 短標題全部被救回來當錨點
+    assert result["anchor_hits"] == len(BARE)
+
+
+def test_bare_titles_without_volume_name_fall_back_to_char_count():
+    """沒給卷名就少一組候選而已，不該因此判成不完整。"""
+    text = _body_with_volume_prefix(VOL, BARE)
+    result = verify_volume(text, _chapters(*BARE))   # volume_name 留空
+    assert result["status"] == "complete"
+    assert result["anchor_total"] == 0               # 短標題不足以當純標題錨點
+
+
+def test_format_without_volume_prefix_is_not_flagged_as_truncated():
+    """**最重要的一條**：檔案版型沒有卷名前綴時，複合錨點會 0 命中。
+
+    若寫死「一定用複合錨點」，這裡就會把完好的檔案判成斷檔。必須自動落到
+    純標題錨點那組。
+    """
+    titles = ["序章 『起點』", "第一章 『途中』", "第二章 『再來』",
+              "第三章 『接著』", "終章 『結尾』"]
+    text = _body_without_volume_prefix(titles)
+    result = verify_volume(text, _chapters(*titles), volume_name=VOL)
+    assert result["status"] == "complete"
+    assert result["anchor_hits"] == len(titles)
+
+
+def test_truncation_still_detected_with_composite_anchors():
+    """救回短標題不能連帶把斷檔偵測關掉。"""
+    text = (_body_with_volume_prefix(VOL, BARE[:2], padding=100)
+            + "尾" * 60000)
+    result = verify_volume(text, _chapters(*BARE), volume_name=VOL)
+    assert result["status"] == "suspect"
+    assert result["reason"] in ("anchor_ratio", "anchor_tail")
+
+
+def test_unrelated_file_is_suspect_not_silently_accepted():
+    """內容跟目錄完全對不上：兩組錨點都 0 命中，不可以靜靜放行。"""
+    result = verify_volume("無關內容" * 40000, _chapters(*BARE), volume_name=VOL)
+    assert result["status"] == "suspect"
+    assert result["reason"] == "anchor_ratio"

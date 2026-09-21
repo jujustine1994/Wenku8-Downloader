@@ -131,6 +131,28 @@ if (-not (Test-Path "venv")) {
         Remove-Item -Recurse -Force $dir.FullName
     }
     uv pip install -r requirements.txt --python venv\Scripts\python.exe -q
+    if ($LASTEXITCODE -ne 0) {
+        # uv 刪不掉唯讀目錄：Windows 的 RemoveDirectory 對唯讀目錄一律回
+        # ERROR_ACCESS_DENIED，uv 會報 "os error 5 存取被拒"。檔案同步工具
+        # （2026-09-21 實測是 Google Drive 在備份 Documents\Code）會把唯讀屬性
+        # 加到 site-packages 底下的目錄上，還會留下 "xxx (1).py" 影子檔。
+        # 上面那段只清「缺 METADATA 的 dist-info」，擋不到這個，所以改成
+        # 失敗才修、修完重試一次：平常一毛錢不花，出事才動作。
+        Write-Host "[INFO] 套件更新失敗，清除唯讀屬性與同步殘留檔後重試..." -ForegroundColor Yellow
+        $sp = "venv\Lib\site-packages"
+        Get-ChildItem $sp -Recurse -Directory -ErrorAction SilentlyContinue |
+            Where-Object { $_.Attributes -band [IO.FileAttributes]::ReadOnly } |
+            ForEach-Object {
+                $_.Attributes = $_.Attributes -band (-bnot [IO.FileAttributes]::ReadOnly)
+            }
+        Get-ChildItem $sp -Recurse -File -Filter "* (1).*" -ErrorAction SilentlyContinue |
+            ForEach-Object { Remove-Item -LiteralPath $_.FullName -Force -ErrorAction SilentlyContinue }
+        uv pip install -r requirements.txt --python venv\Scripts\python.exe -q
+        if ($LASTEXITCODE -ne 0) {
+            Write-Host "[WARN] 套件更新仍失敗，將以現有套件繼續啟動。" -ForegroundColor Yellow
+            Write-Log "套件更新失敗（清除唯讀屬性後重試仍失敗）" "WARN"
+        }
+    }
 }
 
 . ".\venv\Scripts\Activate.ps1"

@@ -60,7 +60,7 @@ root/
 | `src/converter.py` | `convert_to_traditional`（簡轉繁核心，OpenCC s2twp）；`_detect_and_decode`（本機既有檔案的 BOM 偵測 + utf-8/gbk/big5 比對，供「轉換」tab 用）；`run_download_all`/`repair_volume` 下載完成後都會呼叫 `convert_to_traditional` |
 | `src/logutil.py` | 執行紀錄共用模組（`logs/app.log`，main.py/downloader.py 共用同一檔案，不分割、不輪替；`_extract_status` 從例外取 HTTP status code） |
 | `src/main.py` | tkinter `App` 類別：三個分頁（下載/轉換/設定）、Preview 分類視窗、queue 輪詢與按鈕狀態機、下載完自動接續修復鏈 |
-| `launcher.ps1` | Python/uv 檢查、首次安裝說明、venv 建立、啟動 |
+| `launcher.ps1` | Python/uv 檢查、首次安裝說明、venv 建立、啟動；`uv pip install` 失敗時會清除 site-packages 的唯讀屬性與 `xxx (1).*` 同步殘留檔再重試一次（檔案同步工具造成，見 `docs/TODO.md` 第 15 項） |
 
 ## 簡轉繁兩層邏輯（src/converter.py）
 
@@ -93,9 +93,19 @@ root/
    「主要人物」——卷首的人物介紹頁，必然在檔頭——tail 測試就把完整的 155,614 字判成
    斷檔。1–2 個錨點的位置資訊沒有意義，錨點不足就退回字數判定。
 
-**適用範圍要有自覺：** 錨點法只對「章節標題有描述性文字」的書有效。像 aid=1832 這種
-光禿標題的書，10 卷全部 `anchors=0/0`，實際走的是比較弱的字數判定。這是資料端的限制，
-不是可以靠調門檻解決的。
+**兩組錨點並列，取命中高的那組。** 除了純標題，另外算一組「卷名＋章節標題」的複合
+錨點：觀察到標題行是 `　　{卷名} {章節標題}`，接上卷名後連 2 字的「序章」都變成十幾字
+的獨特字串，短標題誤命中正文的問題就消失了。aid=1832 套用後 10 卷從 `anchors=0/0`
+變成每卷 6–11 個錨點、全部命中、尾位置 99.9%。
+
+⚠ **但這不是格式定律，程式也不准當成定律。** 樣本只有 aid=1861 與 1832 兩本書，
+每本小說的命名習慣不同、站方版型也會改。所以兩組錨點是**並列候選**、取命中高的那組，
+而不是寫死一定用複合錨點——標題行沒有卷名前綴的書若被強制用複合錨點判定，完好的檔案
+會被判成斷檔。這條有回歸測試釘著
+（`test_format_without_volume_prefix_is_not_flagged_as_truncated`）。
+
+**貫穿整個模組的原則：薄弱證據只能用來「確認完整」，不能用來「宣告損壞」。**
+誤判損壞的代價是使用者整套重抓，比漏掉一個斷檔嚴重得多。
 
 判定結果 `complete` / `suspect` / `garbled`，`suspect` 另外帶機器可讀的 `reason`。
 **只有 `anchor_ratio` / `anchor_tail`（有章節證據）會自動重抓**；`too_short`（沒有任何

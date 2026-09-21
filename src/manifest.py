@@ -217,7 +217,8 @@ def rebuild_from_files(output_dir: str, aid: str, book_name: str,
         filepath = build_path(vol)
         if not os.path.isfile(filepath):
             continue
-        verdict = verify_file(filepath, vol.get("chapters"), None, SCRIPT_UNKNOWN)
+        verdict = verify_file(filepath, vol.get("chapters"), None,
+                              SCRIPT_UNKNOWN, vol.get("name", ""))
         if verdict is None:
             continue
         try:
@@ -256,7 +257,7 @@ def plan_update(volumes: list[dict], book_entry: dict, build_path,
         if rec is None:
             # 檔案在但沒紀錄（manifest 剛壞掉重建、或使用者自己放進來的）→ 現場驗
             verdict = verify_file(filepath, vol.get("chapters"), median,
-                                  SCRIPT_UNKNOWN)
+                                  SCRIPT_UNKNOWN, vol.get("name", ""))
             group = "ok" if verdict and verdict["status"] == "complete" else "incomplete"
             plan[group].append(vol)
             continue
