@@ -69,6 +69,32 @@ def resolve_output_dir(config: dict, project_root: str) -> str:
     return os.path.join(project_root, OUTPUT_DIR)
 
 
+def describe_url(url: str) -> tuple[str, str]:
+    """把使用者貼的網址翻成一行說明，回傳 (文字, 級別)。
+
+    級別是 "info" / "error"，顏色由呼叫端決定——這裡不碰 widget，才測得動。
+    判斷邏輯完全沿用 scraper 那三個現成的純函式，不另外寫一套解析，
+    否則提示講的跟實際載入的會漸漸對不上。
+    """
+    url = url.strip()
+    if not url:
+        return "", "info"
+    try:
+        aid = parse_aid_from_url(url)
+    except ValueError:
+        return "▸ 認不出這個網址，請貼書籍目錄頁或單卷網址", "error"
+
+    vid = parse_vid_from_url(url)
+    if vid is not None:
+        return f"▸ 單卷 · 書號 {aid} · vid {vid}", "info"
+
+    cid = parse_cid_from_url(url)
+    if cid is not None:
+        return f"▸ 單卷 · 書號 {aid} · 章節 {cid}（載入後確認是哪一卷）", "info"
+
+    return f"▸ 整套目錄 · 書號 {aid}", "info"
+
+
 def format_seq_ranges(indexes: list[int], max_parts: int = 3) -> str:
     """把卷序整理成人看得懂的短字串：[1,2,3,5] → "1–3、5（共 4 卷）"。
 
@@ -225,7 +251,9 @@ class App:
         tab_download.rowconfigure(3, weight=1)
 
         # === URL 輸入區 ===
-        frame_url = ttk.LabelFrame(tab_download, text=" 書籍目錄網址 ", padding=8)
+        frame_url = ttk.LabelFrame(
+            tab_download, text=" 書籍網址（整套目錄或單卷皆可） ", padding=8
+        )
         frame_url.grid(row=0, column=0, sticky="ew", **pad)
         frame_url.columnconfigure(0, weight=1)
 
@@ -242,6 +270,12 @@ class App:
         ttk.Button(url_row, text="⚙", command=self._goto_settings_tab, width=4).grid(
             row=0, column=2, padx=(4, 0)
         )
+
+        # 貼進去的當下就告訴使用者程式會怎麼處理這條網址（整套 / 單卷 / 認不出），
+        # 不用等按了「載入」抓完目錄才從 Preview 視窗標題發現。
+        self._url_hint = ttk.Label(frame_url, text="", font=FH, foreground="gray")
+        self._url_hint.pack(fill="x", anchor="w", pady=(4, 0))
+        self.url_var.trace_add("write", lambda *_: self._update_url_hint())
 
         folder_row = ttk.Frame(frame_url)
         folder_row.pack(fill="x", pady=(6, 0))
@@ -1272,6 +1306,13 @@ class App:
             manifest.median_chars(data, self._aid),
         )
 
+    def _update_url_hint(self):
+        text, level = describe_url(self.url_var.get())
+        # 顏色沿用狀態列那組，不另外挑一套；灰色在三個主題下都讀得到
+        self._url_hint.config(
+            text=text, foreground="#C62828" if level == "error" else "gray"
+        )
+
     def _apply_plan_selection(self, vids: set):
         """照 vid 集合設定下載清單的勾選狀態。"""
         for vol, var in zip(self._volumes, self._check_vars):
@@ -1670,8 +1711,11 @@ class App:
         self.title_label.config(text="載入中...")
         self.progress_bar.config(mode="indeterminate")
         self.progress_bar.start(10)
-        self.progress_label.config(text="正在取得目錄...")
-        self._set_status("正在載入書籍目錄...", "info")
+        # 單卷模式也一樣要整份抓目錄（編號要靠全部卷才算得出來），所以訊息講「模式」
+        # 而不是「只抓一卷」——後者會讓使用者以為抓的東西變少了
+        mode = "（單卷模式）" if (single_vid or single_cid) else ""
+        self.progress_label.config(text=f"正在取得目錄{mode}...")
+        self._set_status(f"正在載入書籍目錄{mode}...", "info")
 
         def _load_worker():
             try:
