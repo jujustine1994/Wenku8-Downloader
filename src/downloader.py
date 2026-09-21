@@ -3,8 +3,10 @@ import os
 import time
 import queue
 from curl_cffi import requests as cf_requests
+from src import manifest
 from src.config import DOWNLOAD_BASE_URL, RETRY_COUNT, RETRY_DELAY
 from src.converter import convert_to_traditional
+from src.verify import verify_file
 from src.scraper import format_index_token
 from src.logutil import _write_log, _write_log_header, _extract_status
 from src.logtext import log_t
@@ -182,8 +184,24 @@ def build_filepath(output_dir: str, book_name: str, volume_index: int,
                    index_fmt: str = "padded",
                    include_book_name: bool = True,
                    separator: str = " ",
-                   index_prefix: str = "") -> str:
+                   index_prefix: str = "",
+                   convert_traditional: bool = False) -> str:
+    """組出單卷的完整輸出路徑。
+
+    convert_traditional 跟內文轉換共用同一個設定：勾了簡轉繁，檔名裡的書名與
+    卷名（都是從簡體站抓回來的原文）也一起轉。轉換要在 safe() 濾掉非法字元
+    **之前**做——OpenCC 是詞庫式轉換，先把字元挖掉會影響上下文判斷。
+
+    ⚠ 這個函式是檔名的唯一真相來源，下載、修復、掃描、manifest 比對四條路徑
+    全都走它。convert_traditional 少傳給其中任何一條，就會變成「寫檔用繁體
+    檔名、找檔用簡體檔名」，結果是每一卷都被判定缺檔然後整套重抓。
+
+    預設 False 是刻意的：漏傳時維持既有行為（不轉），不會靜默改掉檔名。
+    """
     safe = lambda s: "".join(c for c in s if c not in r'\/:*?"<>|')
+    if convert_traditional:
+        book_name = convert_to_traditional(book_name)
+        volume_name = convert_to_traditional(volume_name)
     parts = []
     token = format_index_token(volume_index, total, index_fmt, index_prefix)
     if token:
@@ -196,10 +214,44 @@ def build_filepath(output_dir: str, book_name: str, volume_index: int,
     return os.path.join(output_dir, filename)
 
 
+# 哪些「可疑」的判定結果值得自動重抓一次。
+#
+# 只有錨點類的理由進來：那是**有證據**的判定——目錄說有這幾章，檔案裡找不到，
+# 幾乎一定是伺服器回了截斷的內容。"too_short" 刻意不列入：它是沒有任何章節錨點
+# 時才會走到的字數 fallback，而插圖卷、後記這種卷本來就可能真的很短，自動重抓
+# 只會讓它每次都被抓一遍又每次都判定可疑。那種情況仍會記進 manifest 標成
+# suspect，在「更新」視窗的「不完整」那組列出來，由使用者自己決定要不要抓。
+_AUTO_REPAIR_REASONS = ("anchor_ratio", "anchor_tail")
+
+
+def _record_manifest(output_dir: str, aid: str, book_name: str, vol: dict,
+                     filepath: str, convert_traditional: bool,
+                     median: int | None) -> dict | None:
+    """跑完整性判定並寫進 manifest，回傳判定結果（失敗回 None）。
+
+    刻意讀回剛寫好的檔案而不是驗記憶體裡的字串：manifest 的 size 一定要取磁碟
+    實測值（Windows text mode 會把 \\n 翻成 \\r\\n，bytes 跟記憶體算的對不上），
+    順手用同一份磁碟內容做判定，兩邊來源一致。單卷 300KB 讀+掃約 5–10ms。
+
+    任何失敗一律吞掉——紀錄掛掉不能拖垮下載。
+    """
+    try:
+        script = manifest.script_for(convert_traditional)
+        verdict = verify_file(filepath, vol.get("chapters"), median, script)
+        if verdict is None:
+            return None
+        manifest.record_volume(output_dir, aid, book_name, vol, filepath,
+                               verdict, script)
+        return verdict
+    except OSError:
+        return None
+
+
 def scan_existing_volumes(volumes: list[dict], output_dir: str, book_name: str,
                           index_fmt: str = "padded",
                           include_book_name: bool = True,
-                          separator: str = " ") -> list[dict]:
+                          separator: str = " ",
+                          convert_traditional: bool = False) -> list[dict]:
     """比對卷列表與資料夾實際檔案，回傳缺檔或含亂碼的卷清單。純檢查，不發網路請求。"""
     total = len(volumes)
     missing_or_garbled = []
@@ -209,7 +261,8 @@ def scan_existing_volumes(volumes: list[dict], output_dir: str, book_name: str,
         prefix = SIDE_INDEX_PREFIX if vol.get("category") == "side" else ""
         filepath = build_filepath(output_dir, book_name, seq_index, vol["name"], seq_total,
                                   index_fmt, include_book_name, separator,
-                                  index_prefix=prefix)
+                                  index_prefix=prefix,
+                                  convert_traditional=convert_traditional)
         if not os.path.isfile(filepath) or check_garbled(filepath):
             missing_or_garbled.append(vol)
     return missing_or_garbled
@@ -234,6 +287,10 @@ def run_download_all(aid: str, book_name: str, volumes: list[dict],
     _write_log_header(log_t("hdr.download", book=book_name, total=total,
                             retry=retry_label_hdr))
 
+    # 沒有章節錨點的卷（單章卷、全短標題卷）要靠同書已完成卷的字數中位數當基準，
+    # 整批算一次就好，不必每卷重讀 manifest
+    median = manifest.median_chars(manifest.load(output_dir), aid)
+
     for i, vol in enumerate(volumes, 1):
         msg_queue.put(("progress", i, total, vol["name"]))
         seq_index = vol.get("seq_index", vol["index"])
@@ -243,17 +300,27 @@ def run_download_all(aid: str, book_name: str, volumes: list[dict],
         try:
             filepath = build_filepath(output_dir, book_name, seq_index, vol["name"], seq_total,
                                       index_fmt, include_book_name, separator,
-                                      index_prefix=prefix)
+                                      index_prefix=prefix,
+                                      convert_traditional=convert_traditional)
             ok = download_volume(aid, vol["vid"], filepath, retry_count, retry_delay,
                                  skip_event, convert_traditional)
             if ok:
                 if skip_event and skip_event.is_set():
                     skip_event.clear()
                 success += 1
+                verdict = _record_manifest(output_dir, aid, book_name, vol,
+                                           filepath, convert_traditional, median)
                 if check_garbled(filepath):
                     garbled_volumes.append(vol)
                     msg_queue.put(("log", "warn", index_str, vol["name"],
                                    t("dl.detail.garbled")))
+                elif verdict and verdict["reason"] in _AUTO_REPAIR_REASONS:
+                    # 章節錨點對不上＝有證據顯示伺服器回了不完整的內容
+                    # （HTTP 200 但內容被截斷）。併進 garbled_volumes 讓既有的
+                    # 自動修復鏈重抓一次，不另外開一條流程。
+                    garbled_volumes.append(vol)
+                    msg_queue.put(("log", "warn", index_str, vol["name"],
+                                   t("dl.detail.incomplete")))
                 else:
                     msg_queue.put(("log", "ok", index_str, vol["name"], ""))
             else:
@@ -312,6 +379,8 @@ def run_repair_all(aid: str, book_name: str, volumes: list[dict],
     _write_log_header(log_t("hdr.repair", book=book_name, total=total,
                             retry=retry_label_hdr))
 
+    median = manifest.median_chars(manifest.load(output_dir), aid)
+
     for i, vol in enumerate(volumes, 1):
         msg_queue.put(("progress", i, total, vol["name"]))
         seq_index = vol.get("seq_index", vol["index"])
@@ -321,7 +390,8 @@ def run_repair_all(aid: str, book_name: str, volumes: list[dict],
         try:
             filepath = build_filepath(output_dir, book_name, seq_index, vol["name"], seq_total,
                                       index_fmt, include_book_name, separator,
-                                      index_prefix=prefix)
+                                      index_prefix=prefix,
+                                      convert_traditional=convert_traditional)
             result = repair_volume(aid, vol["vid"], filepath, retry_count, retry_delay,
                                    skip_event, max_attempts, convert_traditional)
             skipped = skip_event is not None and skip_event.is_set()
@@ -339,9 +409,16 @@ def run_repair_all(aid: str, book_name: str, volumes: list[dict],
                 msg_queue.put(("log", "warn", index_str, vol["name"],
                                t("dl.detail.still_garbled")))
             else:
-                success += 1
-                msg_queue.put(("log", "ok", index_str, vol["name"],
-                               t("dl.detail.repaired")))
+                verdict = _record_manifest(output_dir, aid, book_name, vol,
+                                           filepath, convert_traditional, median)
+                if verdict and verdict["reason"] in _AUTO_REPAIR_REASONS:
+                    garbled_volumes.append(vol)
+                    msg_queue.put(("log", "warn", index_str, vol["name"],
+                                   t("dl.detail.incomplete")))
+                else:
+                    success += 1
+                    msg_queue.put(("log", "ok", index_str, vol["name"],
+                                   t("dl.detail.repaired")))
         except Exception as e:
             # 單一卷發生非預期錯誤（例如路徑無法寫入）不應讓整批修復卡死
             fail_volumes.append(vol)

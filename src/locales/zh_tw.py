@@ -190,7 +190,31 @@ STRINGS: dict[str, str] = {
     "dl.detail.repair_failed": "修復失敗",
     "dl.detail.still_garbled": "修復後仍有亂碼",
     "dl.detail.repaired":      "已修復",
+    "dl.detail.incomplete":    "內容可能不完整",
     "dl.retry.infinite":       "無限次",
+
+    # ── 更新（manifest 比對）──
+    # ⚠ manifest 檔裡的 key 與 status/script/reason 的值是**資料**，不在這張表。
+    "gui.btn.update":          "更新",
+    "gui.btn.update_only":     "只抓缺的與新的",
+    "gui.btn.redownload_all":  "全部重抓覆蓋",
+    "gui.btn.close":           "關閉",
+    "gui.update.title":        "更新 - {book}",
+    "gui.update.checking":     "正在比對目錄與資料夾...",
+    "gui.update.nothing":      "已是最新，沒有需要下載的卷",
+    "gui.update.summary":      "共 {total} 卷，需要下載 {n} 卷",
+    "gui.update.group.new":              "新卷（目錄有、本機沒有）",
+    "gui.update.group.incomplete":       "不完整（缺檔或驗證未通過）",
+    "gui.update.group.changed":          "檔案被改過（大小與紀錄不符）",
+    "gui.update.group.chapters_changed": "章節有變動（站方補章或重新分卷）",
+    "gui.update.group.script_mismatch":  "簡繁與目前設定不同",
+    "gui.update.group.ok":               "已完整（不需處理）",
+    "gui.existing.title":      "資料夾裡已有檔案",
+    "gui.existing.message":    "這本書共 {total} 卷，資料夾裡已有 {have}。\n要只抓缺的與新的，還是全部重抓覆蓋？",
+    "gui.existing.range_more": "{head} 等 {n} 卷",
+    "gui.existing.n_volumes":  "{n} 卷",
+    "gui.status.single_volume": "已鎖定單卷：{name}",
+    "gui.status.vid_not_found": "網址指定的卷不在目錄中，改為載入整套",
 
     # ── 簡轉繁 ──
     "conv.detail.encoding_fixed": "偵測為 {enc} 編碼，已修正",

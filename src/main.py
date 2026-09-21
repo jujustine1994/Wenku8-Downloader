@@ -11,11 +11,16 @@ from tkinter import ttk, scrolledtext
 from src import i18n
 from src.i18n import t
 from src.config import OUTPUT_DIR, RETRY_COUNT, RETRY_DELAY
+from src import manifest
 from src.scraper import (
-    parse_aid_from_url, fetch_catalog, parse_book_title, parse_volumes,
+    parse_aid_from_url, parse_vid_from_url, parse_cid_from_url,
+    find_volume_by_cid, fetch_catalog, parse_book_title, parse_volumes,
     assign_categories_and_sequence, resequence_by_category, format_index_token,
+    classify_volume,
 )
-from src.downloader import run_download_all, run_repair_all, scan_existing_volumes
+from src.downloader import (
+    run_download_all, run_repair_all, scan_existing_volumes, build_filepath,
+)
 from src.logutil import _write_log, _extract_status
 from src.logtext import log_t
 from src.sitedata import DEFAULT_SIDE_KEYWORDS, SIDE_INDEX_PREFIX
@@ -62,6 +67,34 @@ def resolve_output_dir(config: dict, project_root: str) -> str:
     if raw:
         return raw
     return os.path.join(project_root, OUTPUT_DIR)
+
+
+def format_seq_ranges(indexes: list[int], max_parts: int = 3) -> str:
+    """把卷序整理成人看得懂的短字串：[1,2,3,5] → "1–3、5（共 4 卷）"。
+
+    連續段落收成區間，段數超過 max_parts 就截斷成「前幾段 等 N 卷」——50 卷
+    不連續時全列出來狀態列會爆掉。空清單回空字串，呼叫端自己決定要不要顯示。
+
+    純函式，不查 i18n：這是數字排版，四種語言長得一樣。
+    """
+    nums = sorted(set(i for i in indexes if isinstance(i, int)))
+    if not nums:
+        return ""
+    spans: list[tuple[int, int]] = []
+    start = prev = nums[0]
+    for n in nums[1:]:
+        if n == prev + 1:
+            prev = n
+            continue
+        spans.append((start, prev))
+        start = prev = n
+    spans.append((start, prev))
+
+    parts = [f"{a}–{b}" if a != b else str(a) for a, b in spans[:max_parts]]
+    text = "、".join(parts)
+    if len(spans) > max_parts:
+        return f"{text} 等 {len(nums)} 卷"
+    return f"{text}（共 {len(nums)} 卷）"
 
 F  = ("Microsoft JhengHei", 12)
 FS = ("Microsoft JhengHei", 11)
@@ -141,6 +174,16 @@ class App:
         self._conv_files: list[str] = []
         self._aid = None
         self._book_name = None
+        # 使用者貼的是單卷網址時鎖定的 vid。None = 整套目錄（既有行為）
+        self._single_vid: int | None = None
+        # 貼章節頁網址時取到的 cid，目錄回來後反查屬於哪一卷
+        self._single_cid: int | None = None
+        # 使用者當初貼的網址，會記進 manifest 的 source_url
+        self._source_url: str = ""
+        # 整份目錄（含未帶進下載清單的卷）。單卷模式下 _volumes 只有一卷，
+        # 但「更新」要跟整份目錄比對，兩者不能混用。
+        self._catalog_volumes: list = []
+        self._updating = False
         _cfg = self._load_config()
         # 語言必須在建任何 widget 之前設好——t() 是建置時查一次表，
         # 設晚了介面會停在預設語言。
@@ -272,6 +315,12 @@ class App:
             btn_row, text="下載選取", command=self._on_download, width=10, state="disabled"
         )
         self.btn_download.pack(side="right", ipady=4)
+        # 「更新」會重抓目錄（連網），跟純本地的「掃描既有檔案」刻意分開兩顆按鈕：
+        # 併在一起使用者會不知道按下去到底會不會連網。
+        self.btn_update = ttk.Button(
+            btn_row, text="更新", command=self._on_update, width=8, state="disabled"
+        )
+        self.btn_update.pack(side="right", ipady=4, padx=(0, 6))
         self.btn_recover = ttk.Button(
             btn_row, text="重試/修復", command=self._on_recover, width=10, state="disabled"
         )
@@ -1178,8 +1227,251 @@ class App:
         self.btn_recover.config(state="disabled", text="重試/修復")
         self.btn_manage.config(state="disabled")
         self.btn_scan.config(state="disabled")
+        self.btn_update.config(state="disabled")
+        self._single_vid = None
+        self._single_cid = None
+        self._catalog_volumes = []
 
-    def _open_preview_dialog(self, book_name: str, volumes: list[dict]):
+    # ---- manifest / 更新 ----
+
+    def _build_path_fn(self, output_dir: str):
+        """給 manifest 用的檔名計算函式。
+
+        manifest 不能 import downloader（downloader 會 import manifest 寫紀錄，
+        反過來就是循環），所以算檔名一律由這裡包好再傳進去。
+        """
+        def build_path(vol: dict) -> str:
+            seq_index = vol.get("seq_index", vol.get("index", 1))
+            seq_total = vol.get("seq_total", len(self._volumes) or 1)
+            prefix = SIDE_INDEX_PREFIX if vol.get("category") == "side" else ""
+            return build_filepath(
+                output_dir, self._book_name, seq_index, vol["name"], seq_total,
+                self._fname_index, self._fname_book_name, self._fname_separator,
+                index_prefix=prefix,
+                convert_traditional=self._convert_traditional,
+            )
+        return build_path
+
+    def _make_plan(self, volumes: list[dict], output_dir: str) -> dict:
+        """比對卷列表 / manifest / 磁碟，回傳 plan_update() 的分組結果。純本地。"""
+        build_path = self._build_path_fn(output_dir)
+        # 順手把書號與使用者貼的網址記進 manifest：這樣資料夾單獨存在時，
+        # 光看 .wenku8.json 就知道是哪本書、從哪裡抓的，不必回頭猜。
+        manifest.record_book_meta(output_dir, self._aid, self._book_name,
+                                  self._source_url)
+        data = manifest.load(output_dir)
+        if not data["books"].get(str(self._aid)):
+            # 沒有紀錄（第一次用這個版本、或換過資料夾）→ 按檔名回推建一份，不重抓
+            data = manifest.rebuild_from_files(
+                output_dir, self._aid, self._book_name, volumes, build_path
+            )
+        book = data["books"].get(str(self._aid), {})
+        return manifest.plan_update(
+            volumes, book, build_path,
+            manifest.script_for(self._convert_traditional),
+            manifest.median_chars(data, self._aid),
+        )
+
+    def _apply_plan_selection(self, vids: set):
+        """照 vid 集合設定下載清單的勾選狀態。"""
+        for vol, var in zip(self._volumes, self._check_vars):
+            var.set(vol["vid"] in vids)
+
+    PLAN_GROUP_LABELS = {
+        "new":              "新卷（目錄有、本機沒有）",
+        "incomplete":       "不完整（缺檔或驗證未通過）",
+        "changed":          "檔案被改過（大小與紀錄不符）",
+        "chapters_changed": "章節有變動（站方補章或重新分卷）",
+        "script_mismatch":  "簡繁與目前設定不同",
+        "ok":               "已完整（不需處理）",
+    }
+
+    def _notify_existing_files(self):
+        """載入完成後比對資料夾，已經有檔案就提醒使用者要只補缺的還是全部重抓。
+
+        純本地比對，不重抓目錄——目錄剛剛才抓過。資料夾裡一卷都沒有時什麼都不做，
+        維持載入完直接勾選下載的既有行為。
+        """
+        if not self._volumes:
+            return
+        output_dir = self._path_var.get().strip()
+        if not output_dir or not os.path.isdir(output_dir):
+            return
+        try:
+            plan = self._make_plan(self._volumes, output_dir)
+        except OSError as e:
+            _write_log(log_t("err.manifest", aid=self._aid, op="scan",
+                             etype=type(e).__name__), "ERROR")
+            return
+
+        have = plan["ok"] + plan["changed"] + plan["script_mismatch"]
+        if not have:
+            return
+
+        need = plan["new"] + plan["incomplete"]
+        have_text = format_seq_ranges(
+            [v.get("seq_index", v.get("index", 0)) for v in have]
+        )
+        if not need:
+            # 全部都在而且都完整：講一句就好，不必為了「需要下載 0 卷」跳視窗
+            self._set_status(
+                f"資料夾裡已有 {have_text}，全部完整，沒有需要下載的卷", "success"
+            )
+            self._select_all(False)
+            return
+        self._set_status(
+            f"資料夾裡已有 {have_text}，需要下載 {len(need)} 卷", "info"
+        )
+
+        win = tk.Toplevel(self.root)
+        win.title("資料夾裡已有檔案")
+        win.resizable(False, False)
+        win.grab_set()
+        ttk.Label(
+            win,
+            text=(f"這本書共 {len(self._volumes)} 卷，"
+                  f"資料夾裡已有 {have_text}。\n"
+                  f"需要下載的有 {len(need)} 卷。"),
+            font=F, justify="left",
+        ).pack(anchor="w", padx=16, pady=(16, 10))
+
+        def _only_missing():
+            self._apply_plan_selection({v["vid"] for v in need})
+            win.destroy()
+
+        def _redownload_all():
+            self._apply_plan_selection({v["vid"] for v in self._volumes})
+            win.destroy()
+
+        row = ttk.Frame(win)
+        row.pack(padx=16, pady=(0, 16))
+        ttk.Button(row, text="只抓缺的與新的", command=_only_missing,
+                   width=16).pack(side="left", padx=4, ipady=4)
+        ttk.Button(row, text="全部重抓覆蓋", command=_redownload_all,
+                   width=14).pack(side="left", padx=4, ipady=4)
+        win.protocol("WM_DELETE_WINDOW", _only_missing)
+
+    def _on_update(self):
+        """重抓目錄 → 跟 manifest／磁碟比對 → 跳確認視窗讓使用者挑要下載哪些。"""
+        if not self._aid or self._updating:
+            return
+        output_dir = self._ensure_output_dir()
+        if output_dir is None:
+            return
+        self._updating = True
+        self.btn_update.config(state="disabled")
+        self.btn_load.config(state="disabled")
+        self._set_status("正在比對目錄與資料夾...", "info")
+        self.progress_bar.config(mode="indeterminate")
+        self.progress_bar.start(10)
+
+        aid = self._aid
+        keywords = list(self._side_keywords)
+        # 使用者在 Preview 手動調過的分類不能被重新分類蓋掉，只有新卷才跑關鍵字
+        known = {v["vid"]: v["category"] for v in (self._catalog_volumes or self._volumes)}
+
+        def _worker():
+            try:
+                soup = fetch_catalog(aid)
+                book_name = parse_book_title(soup)
+                volumes = parse_volumes(soup)
+                classified = [
+                    {**v, "category": known.get(v["vid"])
+                     or classify_volume(v["name"], keywords)}
+                    for v in volumes
+                ]
+                self.msg_queue.put(
+                    ("update_catalog", book_name, resequence_by_category(classified))
+                )
+            except Exception as e:
+                self.msg_queue.put(
+                    ("catalog_error", str(e), type(e).__name__, _extract_status(e))
+                )
+
+        threading.Thread(target=_worker, daemon=True).start()
+
+    def _open_update_dialog(self, plan: dict, total: int):
+        """更新結果的確認視窗：六組分開列，使用者勾完直接送進既有下載流程。"""
+        win = tk.Toplevel(self.root)
+        win.title(f"更新 - {self._book_name}")
+        win.resizable(True, True)
+        win.geometry("520x560")
+        win.minsize(400, 320)
+        win.grab_set()
+
+        need_count = sum(len(plan[g]) for g in manifest.PLAN_DEFAULT_CHECKED)
+        ttk.Label(
+            win, text=f"共 {total} 卷，建議下載 {need_count} 卷", font=FB
+        ).pack(anchor="w", padx=12, pady=(12, 6))
+
+        outer = ttk.Frame(win)
+        outer.pack(fill="both", expand=True, padx=12)
+        outer.columnconfigure(0, weight=1)
+        outer.rowconfigure(0, weight=1)
+        canvas = tk.Canvas(outer, highlightthickness=0)
+        sb = ttk.Scrollbar(outer, orient="vertical", command=canvas.yview)
+        canvas.configure(yscrollcommand=sb.set)
+        canvas.grid(row=0, column=0, sticky="nsew")
+        sb.grid(row=0, column=1, sticky="ns")
+        # 同 Preview 視窗：綁在 Toplevel 上，關窗即銷毀，不用 bind_all 洩漏 handler
+        win.bind(
+            "<MouseWheel>",
+            lambda e: canvas.yview_scroll(int(-1 * (e.delta / 120)), "units"),
+        )
+        body = ttk.Frame(canvas)
+        body_win = canvas.create_window((0, 0), window=body, anchor="nw")
+        body.bind("<Configure>",
+                  lambda e: canvas.configure(scrollregion=canvas.bbox("all")))
+        canvas.bind("<Configure>",
+                    lambda e: canvas.itemconfig(body_win, width=e.width))
+
+        pairs: list[tuple[dict, tk.BooleanVar]] = []
+        for group in manifest.PLAN_GROUPS:
+            vols = plan.get(group) or []
+            if not vols:
+                continue
+            ttk.Label(
+                body, text=f"{self.PLAN_GROUP_LABELS[group]}　{len(vols)} 卷",
+                font=FB,
+            ).pack(anchor="w", pady=(10, 2))
+            default = group in manifest.PLAN_DEFAULT_CHECKED
+            for v in vols:
+                var = tk.BooleanVar(value=default)
+                pairs.append((v, var))
+                label = format_index_token(
+                    v.get("seq_index", v.get("index", 0)),
+                    v.get("seq_total", total), "padded",
+                    SIDE_INDEX_PREFIX if v.get("category") == "side" else "",
+                )
+                ttk.Checkbutton(
+                    body, variable=var, text=f"  {label}  {v['name']}"
+                ).pack(anchor="w", fill="x", padx=12, pady=1)
+
+        def _download():
+            picked = [v for v, var in pairs if var.get()]
+            win.destroy()
+            if not picked:
+                self._set_status("沒有勾選任何卷", "info")
+                return
+            self._start_download(picked)
+
+        btns = ttk.Frame(win)
+        btns.pack(pady=(8, 12))
+        ttk.Button(btns, text="下載選取", command=_download, width=10).pack(
+            side="left", padx=4, ipady=4
+        )
+        ttk.Button(btns, text="關閉", command=win.destroy, width=10).pack(
+            side="left", padx=4, ipady=4
+        )
+
+    def _open_preview_dialog(self, book_name: str, volumes: list[dict],
+                             only_vid: int | None = None):
+        """分類確認視窗。
+
+        only_vid 不是 None 時（使用者貼的是單卷網址）只顯示、只帶出那一卷，
+        但**編號仍照整份目錄算**：seq_index / seq_total 要靠全部卷才算得出來，
+        只拿一卷去 resequence 會把它編成 1，檔名跟其他卷對不上。
+        """
         win = tk.Toplevel(self.root)
         win.title(f"確認分類 - {book_name}")
         win.resizable(True, True)
@@ -1187,9 +1479,17 @@ class App:
         win.minsize(360, 300)
         win.grab_set()
 
-        ttk.Label(
-            win, text=f"書名：{book_name}　共 {len(volumes)} 卷", font=FB
-        ).pack(anchor="w", padx=12, pady=(12, 6))
+        display = [v for v in volumes if only_vid is None or v["vid"] == only_vid]
+        if not display:
+            display = volumes
+            only_vid = None
+
+        header = f"書名：{book_name}　共 {len(volumes)} 卷"
+        if only_vid is not None:
+            header += f"（只載入 1 卷：{display[0]['name']}）"
+        ttk.Label(win, text=header, font=FB).pack(
+            anchor="w", padx=12, pady=(12, 6)
+        )
 
         list_outer = ttk.Frame(win)
         list_outer.pack(fill="both", expand=True, padx=12)
@@ -1225,7 +1525,7 @@ class App:
         batch_vars: list[tk.BooleanVar] = []
         category_vars: list[tk.StringVar] = []
 
-        for v in volumes:
+        for v in display:
             row = ttk.Frame(row_frame)
             row.pack(fill="x", padx=4, pady=2)
             bvar = tk.BooleanVar(value=False)
@@ -1268,26 +1568,42 @@ class App:
         ).pack(side="right")
 
         def _confirm():
+            # 只有顯示出來的那幾卷有下拉選單；沒顯示的維持原本分類。
+            edits = {
+                v["vid"]: ("main" if cv.get() == "正式卷" else "side")
+                for v, cv in zip(display, category_vars)
+            }
             edited = [
-                {**v, "category": "main" if cv.get() == "正式卷" else "side"}
-                for v, cv in zip(volumes, category_vars)
+                {**v, "category": edits.get(v["vid"], v["category"])}
+                for v in volumes
             ]
-            final_volumes = resequence_by_category(edited)
+            # 先用整份目錄算編號，再篩出要帶進下載清單的卷
+            resequenced = resequence_by_category(edited)
+            final_volumes = [
+                v for v in resequenced
+                if only_vid is None or v["vid"] == only_vid
+            ]
             self._book_name = book_name
             self._volumes = final_volumes
-            self.title_label.config(
-                text=f"書名：{book_name}　共 {len(final_volumes)} 卷"
-            )
+            self._catalog_volumes = resequenced
+            title = f"書名：{book_name}　共 {len(final_volumes)} 卷"
+            if only_vid is not None:
+                title += "（單卷）"
+            self.title_label.config(text=title)
             self._build_checkbox_list(final_volumes)
             self.progress_label.config(text="載入完成，勾選要下載的卷後按「下載選取」")
             self.btn_download.config(state="normal")
             self.btn_select_all.config(state="normal")
             self.btn_deselect_all.config(state="normal")
             self.btn_scan.config(state="normal")
+            self.btn_update.config(state="normal")
             self._set_status(
                 f"已載入：{book_name}，共 {len(final_volumes)} 卷", "success"
             )
             win.destroy()
+            # 載入完就地比對一次資料夾（純本地，目錄剛抓過不重抓），
+            # 資料夾裡已經有檔案時直接告訴使用者，不用等他自己按「更新」
+            self._notify_existing_files()
 
         def _cancel():
             self._aid = None
@@ -1340,8 +1656,16 @@ class App:
             self._set_status("網址格式錯誤，找不到 aid 參數", "error")
             return
 
+        # 單卷網址：?vid=Y 直接就是 vid；章節頁 /novel/{分類}/{aid}/{cid}.htm
+        # 只給得到 cid，要等目錄抓回來才反查得出屬於哪一卷。
+        single_vid = parse_vid_from_url(url)
+        single_cid = None if single_vid else parse_cid_from_url(url)
+
         self._aid = aid
         self._reset_book_state()
+        self._single_vid = single_vid
+        self._single_cid = single_cid
+        self._source_url = url
         self.btn_load.config(state="disabled")
         self.title_label.config(text="載入中...")
         self.progress_bar.config(mode="indeterminate")
@@ -1370,10 +1694,15 @@ class App:
         if not selected:
             self._set_status("請至少勾選一卷", "error")
             return
+        self._start_download(selected)
+
+    def _start_download(self, selected: list[dict]):
+        """實際派工下載。_on_download（勾選清單）與更新視窗共用同一條路徑。"""
         output_dir = self._ensure_output_dir()
         if output_dir is None:
             return
         self.btn_download.config(state="disabled")
+        self.btn_update.config(state="disabled")
         self.btn_load.config(state="disabled")
         self.btn_select_all.config(state="disabled")
         self.btn_deselect_all.config(state="disabled")
@@ -1433,6 +1762,7 @@ class App:
         self.btn_select_all.config(state="disabled")
         self.btn_deselect_all.config(state="disabled")
         self.btn_scan.config(state="disabled")
+        self.btn_update.config(state="disabled")
         self.btn_skip.config(state="normal")
         self.log_text.config(state="normal")
         self.log_text.insert("end", f"\n── {log_label} ──\n")
@@ -1477,6 +1807,7 @@ class App:
         found = scan_existing_volumes(
             self._volumes, output_dir, self._book_name,
             self._fname_index, self._fname_book_name, self._fname_separator,
+            convert_traditional=self._convert_traditional,
         )
         existing_vids = {v["vid"] for v in self._recovery_volumes}
         self._recovery_volumes += [v for v in found if v["vid"] not in existing_vids]
@@ -1571,7 +1902,58 @@ class App:
                     self.progress_bar.config(mode="determinate")
                     self.btn_load.config(state="normal")
                     classified = assign_categories_and_sequence(volumes, self._side_keywords)
-                    self._open_preview_dialog(book_name, classified)
+                    only_vid = self._single_vid
+                    if only_vid is None and self._single_cid is not None:
+                        hit = find_volume_by_cid(classified, self._single_cid)
+                        only_vid = hit["vid"] if hit else None
+                    if (only_vid is not None
+                            and not any(v["vid"] == only_vid for v in classified)):
+                        only_vid = None
+                        self._set_status(
+                            "網址指定的卷不在目錄中，改為載入整套", "info"
+                        )
+                    self._single_vid = only_vid
+                    self._open_preview_dialog(book_name, classified, only_vid)
+
+                elif kind == "update_catalog":
+                    _, book_name, volumes = msg
+                    self.progress_bar.stop()
+                    self.progress_bar.config(mode="determinate")
+                    self.btn_load.config(state="normal")
+                    self.btn_update.config(state="normal")
+                    self._updating = False
+                    self._book_name = book_name
+                    self._catalog_volumes = volumes
+                    # 更新一律針對整套目錄比對：單卷模式下 _volumes 只有一卷，
+                    # 拿它比對會看不到其他卷的新舊狀態。
+                    self._volumes = volumes
+                    self._build_checkbox_list(volumes)
+                    self.title_label.config(
+                        text=f"書名：{book_name}　共 {len(volumes)} 卷"
+                    )
+                    self.btn_download.config(state="normal")
+                    self.btn_select_all.config(state="normal")
+                    self.btn_deselect_all.config(state="normal")
+                    self.btn_scan.config(state="normal")
+                    output_dir = self._path_var.get().strip()
+                    try:
+                        plan = self._make_plan(volumes, output_dir)
+                    except OSError as e:
+                        _write_log(log_t("err.manifest", aid=self._aid,
+                                         op="plan", etype=type(e).__name__),
+                                   "ERROR")
+                        self._set_status("比對失敗，無法讀取輸出資料夾", "error")
+                        continue
+                    need = plan["new"] + plan["incomplete"]
+                    self._apply_plan_selection({v["vid"] for v in need})
+                    if not any(plan[g] for g in manifest.PLAN_GROUPS
+                               if g != "ok"):
+                        self._set_status("已是最新，沒有需要下載的卷", "success")
+                    else:
+                        self._set_status(
+                            f"共 {len(volumes)} 卷，需要下載 {len(need)} 卷", "info"
+                        )
+                        self._open_update_dialog(plan, len(volumes))
 
                 elif kind == "catalog_error":
                     _, err, err_type, status = msg
@@ -1580,8 +1962,14 @@ class App:
                     self.title_label.config(text="載入失敗")
                     self.progress_label.config(text="載入失敗，請確認網址")
                     self.btn_load.config(state="normal")
-                    self.btn_select_all.config(state="disabled")
-                    self.btn_deselect_all.config(state="disabled")
+                    # 更新流程也走這條錯誤路徑，卡住的旗標與按鈕要一起解開，
+                    # 否則抓目錄失敗一次之後「更新」就再也按不下去
+                    if self._updating:
+                        self._updating = False
+                        self.btn_update.config(state="normal")
+                    else:
+                        self.btn_select_all.config(state="disabled")
+                        self.btn_deselect_all.config(state="disabled")
                     hint = "（403 錯誤：網站拒絕存取，可稍後再試）" if status == 403 else ""
                     self._set_status(f"載入失敗：{err}{hint}", "error")
                     # 只記類型 + status code + 書號，絕不記 url / response 全文
@@ -1626,6 +2014,7 @@ class App:
                     self.btn_select_all.config(state="normal")
                     self.btn_deselect_all.config(state="normal")
                     self.btn_scan.config(state="normal")
+                    self.btn_update.config(state="normal")
                     self.btn_skip.config(state="disabled")
                     if recovery_count:
                         self.btn_recover.config(

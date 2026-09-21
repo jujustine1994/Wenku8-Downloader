@@ -8,6 +8,9 @@ from src.scraper import (
     classify_volumes,
     resequence_by_category,
     assign_categories_and_sequence,
+    parse_vid_from_url,
+    parse_cid_from_url,
+    find_volume_by_cid,
 )
 
 SAMPLE_HTML = """
@@ -186,3 +189,79 @@ def test_assign_categories_and_sequence_combines_both_steps():
     assert result[1]["seq_total"] == 1
     assert result[2]["category"] == "main"
     assert result[2]["seq_index"] == 2
+
+
+# ── 章節清單擷取（供 src/verify.py 做完整性判定）──
+
+# index.htm 版型：卷標題 td 帶 vid 屬性，章節連結是**相對路徑、沒有 query**，
+# 而且一個 <tr> 裝 4 個 <td>、每個 td 一章。
+INDEX_HTML = """
+<html><body><table>
+  <tr><td class="vcss" colspan="4" vid="65280">第一卷</td></tr>
+  <tr>
+    <td class="ccss"><a href="65281.htm">序章</a></td>
+    <td class="ccss"><a href="65282.htm">第一章</a></td>
+    <td class="ccss"><a href="65283.htm">第二章</a></td>
+    <td class="ccss"><a href="65284.htm">第三章</a></td>
+  </tr>
+  <tr>
+    <td class="ccss"><a href="65640.htm">插圖</a></td>
+    <td class="ccss"></td><td class="ccss"></td><td class="ccss"></td>
+  </tr>
+  <tr><td class="vcss" colspan="4" vid="67828">第二卷</td></tr>
+  <tr><td class="ccss"><a href="67829.htm">序章</a></td></tr>
+</table></body></html>
+"""
+
+
+def test_index_layout_collects_all_chapters_in_a_row():
+    volumes = parse_volumes(BeautifulSoup(INDEX_HTML, "lxml"))
+    assert [c["cid"] for c in volumes[0]["chapters"]] == [
+        65281, 65282, 65283, 65284, 65640
+    ]
+    assert volumes[0]["chapters"][0]["title"] == "序章"
+
+
+def test_index_layout_vid_still_from_header_attribute():
+    volumes = parse_volumes(BeautifulSoup(INDEX_HTML, "lxml"))
+    assert [v["vid"] for v in volumes] == [65280, 67828]
+    assert volumes[0]["first_cid"] == 65281
+
+
+def test_reader_layout_still_derives_vid_from_first_cid():
+    volumes = parse_volumes(BeautifulSoup(SAMPLE_HTML, "lxml"))
+    assert [v["vid"] for v in volumes] == [65280, 67828, 70000]
+    assert [v["first_cid"] for v in volumes] == [65281, 67829, 70001]
+
+
+def test_reader_layout_collects_chapters_too():
+    volumes = parse_volumes(BeautifulSoup(SAMPLE_HTML, "lxml"))
+    assert [c["cid"] for c in volumes[0]["chapters"]] == [65281, 65282]
+
+
+# ── 單卷網址 ──
+
+def test_parse_vid_from_url_reads_query():
+    url = "https://www.wenku8.net/modules/article/reader.php?aid=1861&vid=65280"
+    assert parse_vid_from_url(url) == 65280
+
+
+def test_parse_vid_from_url_returns_none_for_catalog_url():
+    assert parse_vid_from_url("https://www.wenku8.net/book/1861.htm") is None
+
+
+def test_parse_cid_from_url_reads_chapter_page():
+    assert parse_cid_from_url("https://www.wenku8.net/novel/0/1861/65281.htm") == 65281
+
+
+def test_parse_cid_from_url_ignores_book_page():
+    """/book/1861.htm 的數字是 aid 不是 cid，不可誤認成章節。"""
+    assert parse_cid_from_url("https://www.wenku8.net/book/1861.htm") is None
+    assert parse_cid_from_url("https://www.wenku8.net/novel/0/1861/index.htm") is None
+
+
+def test_find_volume_by_cid():
+    volumes = parse_volumes(BeautifulSoup(INDEX_HTML, "lxml"))
+    assert find_volume_by_cid(volumes, 65640)["vid"] == 65280
+    assert find_volume_by_cid(volumes, 67829)["vid"] == 67828
+    assert find_volume_by_cid(volumes, 999) is None

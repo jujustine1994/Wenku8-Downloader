@@ -29,6 +29,8 @@ LOG_TEXT: dict[str, str] = {
     "err.fetch":   "vid={vid} charset={charset} -> {etype}: HTTP {status} | 重試 {retry}",
     "err.volume":  "{book} {index} -> {etype}: HTTP {status}",
     "err.catalog": "載入目錄 aid={aid} -> {etype}: HTTP {status}",
+    # manifest 讀寫失敗只記類型，絕不記檔案內容（裡面有書名、卷名、路徑）
+    "err.manifest": "manifest aid={aid} {op} -> {etype}",
 
     # 重試次數欄位在無限重試模式下的寫法
     "retry.infinite": "無限次",

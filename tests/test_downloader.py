@@ -684,3 +684,157 @@ def test_run_repair_all_passes_max_attempts_through(tmp_path):
     assert mock_repair.call_args[0][3:5] == (RETRY_COUNT, RETRY_DELAY)
     assert mock_repair.call_args.kwargs.get("max_attempts") == 50 or \
            (len(mock_repair.call_args[0]) > 5 and mock_repair.call_args[0][-2] == 50)
+
+
+# ── manifest 整合 ──
+
+def _chaptered_volume(vid=99, index=1, name="第一卷"):
+    return {
+        "index": index, "seq_index": index, "seq_total": 1,
+        "name": name, "vid": vid, "first_cid": vid + 1, "category": "main",
+        "chapters": [{"cid": vid + 1 + i, "title": f"第{i}章 『測試標題』"}
+                     for i in range(3)],
+    }
+
+
+def _body_with(titles, padding=2000):
+    parts = []
+    for tt in titles:
+        parts.append("　　" + tt + "\n" + "內" * padding + "\n")
+    return "".join(parts).encode("utf-8")
+
+
+def test_run_download_all_writes_manifest(tmp_path):
+    from src import manifest
+    vol = _chaptered_volume()
+    body = _body_with([c["title"] for c in vol["chapters"]])
+    session = _mock_session([_ok_resp(content=body)])
+    q = queue.Queue()
+    with patch("src.downloader._get_session", return_value=session):
+        run_download_all("1861", "書名", [vol], str(tmp_path), q,
+                         convert_traditional=False)
+
+    rec = manifest.load(str(tmp_path))["books"]["1861"]["volumes"]["99"]
+    assert rec["status"] == "complete"
+    assert rec["script"] == manifest.SCRIPT_SIMPLIFIED
+    assert rec["cids"] == [c["cid"] for c in vol["chapters"]]
+    assert rec["size"] > 0
+
+
+def test_truncated_content_lands_in_garbled_list(tmp_path):
+    """伺服器回 HTTP 200 但只給前半段：沒有亂碼，但後段章節標題整批消失。"""
+    from src import manifest
+    vol = _chaptered_volume()
+    titles = [c["title"] for c in vol["chapters"]]
+    truncated = _body_with(titles[:1]) + ("尾" * 50000).encode("utf-8")
+    session = MagicMock()
+    session.get.return_value = _ok_resp(content=truncated)
+    q = queue.Queue()
+    with patch("src.downloader._get_session", return_value=session):
+        run_download_all("1861", "書名", [vol], str(tmp_path), q,
+                         convert_traditional=False)
+    msgs = []
+    while not q.empty():
+        msgs.append(q.get())
+    done = msgs[-1]
+    assert [v["vid"] for v in done[3]] == [99]      # garbled_volumes
+    rec = manifest.load(str(tmp_path))["books"]["1861"]["volumes"]["99"]
+    assert rec["status"] == "suspect"
+
+
+def test_short_volume_without_chapters_is_not_auto_repaired(tmp_path):
+    """沒有章節錨點的短卷（插圖卷這類）只記 manifest，不塞進自動修復清單。"""
+    from src import manifest
+    vol = {"index": 1, "seq_index": 1, "seq_total": 1, "name": "插圖",
+           "vid": 99, "first_cid": 100, "category": "side", "chapters": []}
+    session = MagicMock()
+    session.get.return_value = _ok_resp(content=("圖" * 300).encode("utf-8"))
+    q = queue.Queue()
+    with patch("src.downloader._get_session", return_value=session):
+        run_download_all("1861", "書名", [vol], str(tmp_path), q,
+                         convert_traditional=False)
+    msgs = []
+    while not q.empty():
+        msgs.append(q.get())
+    done = msgs[-1]
+    assert done[3] == []        # 不進自動修復
+    rec = manifest.load(str(tmp_path))["books"]["1861"]["volumes"]["99"]
+    assert rec["status"] == "suspect"
+    assert rec["reason"] == "too_short"
+
+
+def test_manifest_failure_does_not_break_download(tmp_path):
+    vol = _chaptered_volume()
+    session = _mock_session([_ok_resp()])
+    q = queue.Queue()
+    with patch("src.downloader._get_session", return_value=session), \
+         patch("src.manifest.record_volume", side_effect=OSError("disk full")):
+        run_download_all("1861", "書名", [vol], str(tmp_path), q,
+                         convert_traditional=False)
+    msgs = []
+    while not q.empty():
+        msgs.append(q.get())
+    assert msgs[-1][0] == "done"
+    assert msgs[-1][1] == 1       # 下載照樣算成功
+
+
+# ── 檔名簡轉繁 ──
+
+def test_build_filepath_keeps_simplified_by_default(tmp_path):
+    """預設不轉：漏傳參數時維持既有行為，不會靜默改掉檔名。"""
+    path = build_filepath(str(tmp_path), "从零开始的异世界生活", 1,
+                          "第一卷 剥离城阿德拉", 3)
+    assert os.path.basename(path) == "01 从零开始的异世界生活 第一卷 剥离城阿德拉.txt"
+
+
+def test_build_filepath_converts_book_and_volume_name(tmp_path):
+    path = build_filepath(str(tmp_path), "从零开始的异世界生活", 1,
+                          "第一卷 剥离城阿德拉", 3, convert_traditional=True)
+    assert os.path.basename(path) == "01 從零開始的異世界生活 第一卷 剝離城阿德拉.txt"
+
+
+def test_build_filepath_converts_before_stripping_illegal_chars(tmp_path):
+    """轉換要在濾掉非法字元之前：先挖字元會影響 OpenCC 的上下文判斷。"""
+    path = build_filepath(str(tmp_path), "书名:副题", 1, "第一卷", 1,
+                          convert_traditional=True)
+    name = os.path.basename(path)
+    assert "書名副題" in name
+    assert ":" not in name
+
+
+def test_build_filepath_side_prefix_unaffected(tmp_path):
+    path = build_filepath(str(tmp_path), "异世界", 1, "番外篇", 1,
+                          index_prefix="外傳", convert_traditional=True)
+    assert os.path.basename(path) == "外傳01 異世界 番外篇.txt"
+
+
+def test_scan_finds_traditional_filenames_when_conversion_on(tmp_path):
+    """掃描必須跟下載用同一組檔名，否則每卷都會被判定缺檔。"""
+    volumes = [{"index": 1, "seq_index": 1, "seq_total": 1,
+                "name": "第一卷 剥离城阿德拉", "vid": 99, "category": "main"}]
+    fp = build_filepath(str(tmp_path), "艾梅洛阁下II世事件簿", 1,
+                        volumes[0]["name"], 1, convert_traditional=True)
+    with open(fp, "w", encoding="utf-8") as f:
+        f.write("內容" * 100)
+
+    assert scan_existing_volumes(volumes, str(tmp_path), "艾梅洛阁下II世事件簿",
+                                 convert_traditional=True) == []
+    # 沒開轉換時去找簡體檔名，找不到 → 判定缺檔（刻意驗證這個對比）
+    assert len(scan_existing_volumes(volumes, str(tmp_path),
+                                     "艾梅洛阁下II世事件簿")) == 1
+
+
+def test_download_and_scan_agree_on_filename(tmp_path):
+    """下載寫出去的檔名，掃描一定要找得到——四條路徑共用同一個計算。"""
+    vol = {"index": 1, "seq_index": 1, "seq_total": 1,
+           "name": "第一卷 剥离城阿德拉", "vid": 99, "first_cid": 100,
+           "category": "main", "chapters": []}
+    session = _mock_session([_ok_resp()])
+    q = queue.Queue()
+    with patch("src.downloader._get_session", return_value=session):
+        run_download_all("1861", "艾梅洛阁下II世事件簿", [vol], str(tmp_path), q,
+                         convert_traditional=True)
+    files = [f for f in os.listdir(tmp_path) if f.endswith(".txt")]
+    assert files == ["01 艾梅洛閣下II世事件簿 第一卷 剝離城阿德拉.txt"]
+    assert scan_existing_volumes([vol], str(tmp_path), "艾梅洛阁下II世事件簿",
+                                 convert_traditional=True) == []

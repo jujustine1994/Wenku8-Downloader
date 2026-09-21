@@ -58,6 +58,40 @@ def parse_aid_from_url(url: str) -> str:
     raise ValueError("Cannot determine aid from the given URL or book number")
 
 
+# 單一章節的網頁網址：/novel/{分類}/{aid}/{cid}.htm。
+# 刻意寫死這個完整樣式而不是只抓 `\d+\.htm`——`/book/1861.htm` 是書籍頁，
+# 那串數字是 aid 不是 cid，只抓數字會把它誤認成章節。
+CHAPTER_URL_RE = re.compile(r"/novel/\d+/\d+/(\d+)\.htm")
+
+
+def parse_vid_from_url(url: str) -> int | None:
+    """從網址取 vid（單卷）。沒有就回 None，代表使用者貼的是整套目錄網址。
+
+    只認 query 裡的 `vid`（reader.php?aid=X&vid=Y 這種）。找不到不 raise：
+    「沒有 vid」是正常情況，不是錯誤。
+    """
+    params = urllib.parse.parse_qs(urllib.parse.urlparse(url.strip()).query)
+    raw = (params.get("vid") or [None])[0]
+    if raw and raw.isdigit():
+        return int(raw)
+    return None
+
+
+def parse_cid_from_url(url: str) -> int | None:
+    """從單一章節的網頁網址取 cid。呼叫端再靠章節清單反查這個 cid 屬於哪一卷。"""
+    m = CHAPTER_URL_RE.search(url.strip())
+    return int(m.group(1)) if m else None
+
+
+def find_volume_by_cid(volumes: list[dict], cid: int) -> dict | None:
+    """哪一卷含有這個 cid。貼章節網址時用來反查卷；找不到回 None。"""
+    for vol in volumes:
+        for c in vol.get("chapters") or []:
+            if c["cid"] == cid:
+                return vol
+    return None
+
+
 def fetch_catalog(aid: str) -> BeautifulSoup:
     url = f"{CATALOG_BASE_URL}?aid={aid}"
     # impersonate="chrome120" 模擬 Chrome TLS 指紋，繞過 Cloudflare Bot Management
@@ -105,11 +139,40 @@ def parse_book_title(soup: BeautifulSoup) -> str:
     return UNKNOWN_BOOK_TITLE
 
 
+def _cid_from_href(href: str) -> int | None:
+    """章節連結的 cid。兩種版型都要吃：
+
+    - reader.php 版型：`?cid=65281`（絕對或相對都可能）
+    - index.htm 版型：相對路徑 `65281.htm`，**沒有 query**
+
+    只吃 `?cid=` 的話 index.htm 版型一章都抓不到。
+    """
+    params = urllib.parse.parse_qs(urllib.parse.urlparse(href).query)
+    raw = (params.get("cid") or [None])[0]
+    if raw and raw.isdigit():
+        return int(raw)
+    m = re.search(r"(?:^|/)(\d+)\.htm", href)
+    return int(m.group(1)) if m else None
+
+
 def parse_volumes(soup: BeautifulSoup) -> list[dict]:
+    """解析目錄頁的卷列表，每卷帶 `chapters`（cid + 標題）。
+
+    `chapters` 供 src/verify.py 做完整性判定用——完整的卷，每個章節標題都會
+    出現在下載的 txt 裡；斷檔的卷後半段標題會整批消失。標題保持**網站原始
+    簡體**，它是拿去跟下載內容比對的資料，不翻譯（見 src/sitedata.py 的準則）。
+
+    ⚠ index.htm 版型是**一個 `<tr>` 裝 4 個 `<td>`、每個 td 一章**，所以要逐 td
+    走完整列的所有 `<a>`；只取 `row.find("a")` 會漏掉 3/4 的章節。
+
+    vid 推導維持原樣不動：index.htm 版型讀卷標題 td 的 vid 屬性，reader.php
+    版型用「第一章 cid - 1」。沒有任何章節連結、也沒有 vid 屬性的卷一樣會被
+    丟掉（既有行為）。
+    """
     volumes = []
-    current_volume = None
+    current_volume = None   # 正在累積章節的卷（可能還沒進 volumes）
+    pending_volume = None   # 還沒拿到 vid、等第一個章節連結的卷
     volume_index = 0
-    found_first_chapter = False
 
     for row in soup.find_all("tr"):
         cells = row.find_all("td")
@@ -118,39 +181,41 @@ def parse_volumes(soup: BeautifulSoup) -> list[dict]:
         if (len(cells) == 1
                 and cells[0].get("colspan")
                 and not cells[0].find("a")):
-            current_volume = {
-                "index": volume_index + 1,
-                "name": cells[0].get_text(strip=True),
-            }
             volume_index += 1
-            found_first_chapter = False
+            current_volume = {
+                "index": volume_index,
+                "name": cells[0].get_text(strip=True),
+                "chapters": [],
+            }
 
             # index.htm 版型：卷標題 td 直接帶 vid="63835" 屬性，數值等同
             # reader.php 版型「第一章 cid - 1」算出來的 vid，可省去往下找連結
             header_vid = cells[0].get("vid")
             if header_vid and header_vid.isdigit():
-                volumes.append({
-                    **current_volume,
-                    "first_cid": int(header_vid) + 1,
-                    "vid": int(header_vid),
-                })
-                found_first_chapter = True
+                current_volume["vid"] = int(header_vid)
+                current_volume["first_cid"] = int(header_vid) + 1
+                volumes.append(current_volume)
+                pending_volume = None
+            else:
+                pending_volume = current_volume
             continue
 
-        # First chapter link under current volume
-        if current_volume and not found_first_chapter:
-            first_link = row.find("a")
-            if first_link and first_link.get("href"):
-                parsed = urllib.parse.urlparse(first_link["href"])
-                params = urllib.parse.parse_qs(parsed.query)
-                if "cid" in params:
-                    cid = int(params["cid"][0])
-                    volumes.append({
-                        **current_volume,
-                        "first_cid": cid,
-                        "vid": cid - 1,
-                    })
-                    found_first_chapter = True
+        if current_volume is None:
+            continue
+
+        for cell in cells:
+            for link in cell.find_all("a"):
+                cid = _cid_from_href(link.get("href") or "")
+                if cid is None:
+                    continue
+                current_volume["chapters"].append(
+                    {"cid": cid, "title": link.get_text(strip=True)}
+                )
+                if pending_volume is not None:
+                    pending_volume["first_cid"] = cid
+                    pending_volume["vid"] = cid - 1
+                    volumes.append(pending_volume)
+                    pending_volume = None
 
     return volumes
 
