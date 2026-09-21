@@ -76,6 +76,48 @@
 
 ## 更新記錄
 
+### 2026-09-21 — 這一天的來龍去脈（本專案當天的異動一次看完）
+
+CTH 抽查 2026-09-14 那輪「10 個 Windows 工具專案 venv 改用 uv」有沒有做確實，
+一路查下去翻出三層問題，本專案當天的異動都是這條線上的：
+
+- **第一層**：9/14 的遷移有些沒做確實。urusai upload 重建後根本沒裝到 pytest
+  （`requirements.txt` 只列執行期依賴），測試直接跑不動，而它的 CHANGELOG 還寫著
+  「測試 90 條全過」——那是舊 venv 的結果。另外查出 3 個專案（AV Code Rename、
+  Excel repair、FanCheck）當初根本沒被納入那輪遷移，還掛在 python.org 版系統 Python 上。
+- **第二層**：9/14 有 3 個專案不是乾淨重建，是在舊 `site-packages` 上直接疊裝，
+  留下一堆孤兒 `dist-info`（同一套件掛新舊兩份 metadata，`uv pip list` 會列兩次）。
+  同時發現 4 個專案有測試卻沒把 pytest 寫進 requirements，只是 venv 還沒重建過所以沒爆。
+- **第三層（真正的病根）**：清乾淨重建後幾小時內又被污染。查出 `Documents\Code`
+  整個被 Google Drive 桌面版備份（從 `root_preference_sqlite.db` 的 `roots` 表確認，
+  `root_id=4`、`state=2`），venv 放專案裡就會被同步，`site-packages` 目錄被設成唯讀、
+  產生 `xxx (1).py` 影子檔、套件被切成兩半。清查當下 **13 個專案的 venv 全部**中招。
+  所以最後把 venv 全部搬到 `%USERPROFILE%\venvs\` 並改了規則檔 `windows-tool.md`，
+  以後新專案一律建在專案外。
+
+**本專案當天的異動**：
+
+1. venv 搬到專案外（commit `447e705`）
+
+同一輪處理的還有其他 12 個專案，以及全域規則檔 `windows-tool.md`
+（新增「venv 位置」章節）、`windows-tool-templates.md`、`windows-tool-pitfalls.md`。
+
+**本專案當時的污染程度**：`site-packages` 底下 309 個目錄**全部**被設成唯讀，
+另外還有 5 個影子檔（`venv/pyvenv (1).cfg`、`venv/Scripts/python (1).exe`、
+`pythonw (1).exe`、`pytest (1).exe`、`py (1).test.exe`）。這裡要特別記一筆：
+2026-09-21 稍早曾經手動清過一次並重裝，當時的結論是「venv 目前是好的」，
+但實際抽查時影子檔還在——**手動清乾淨這件事本身沒有成功，而且就算成功也擋不住
+下一次同步**，這正是最後決定把 venv 整個搬出去的原因。
+
+**commit 歸屬要注意**：本專案的 `launcher.ps1` 改動被拆在兩筆 commit 裡。
+改動做到一半時，另一個 session 的 `fd19961`（訊息寫的是
+「docs: 記錄偶發下載失敗的真因是 HTTP 429 限流」）把當時還在工作目錄的
+`launcher.ps1` 一起掃進去了，剩下的兩行才在 `447e705`。所以**光看 commit 訊息
+會找不到 launcher 的 venv 路徑改動**，要往 `fd19961` 裡找。檔案本身已確認完整
+正確（`$VenvPath` / `$VenvPython` 定義、9 處引用、BOM、PowerShell 語法都驗過），
+沒有被覆蓋或漏改。
+
+
 ### 2026-09-21 — 維護：venv 搬到專案資料夾外（`%USERPROFILE%\venvs\Wenku8 Downloader\`）
 
 `Documents\Code` 整個被 Google Drive 桌面版備份（從
