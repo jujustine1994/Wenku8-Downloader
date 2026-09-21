@@ -32,7 +32,7 @@ c7af7a3  feat(i18n): 批次2 log 字串抽 logtext.py + 資料字串抽 sitedata
 
 ## 2. 下一步具體要做什麼
 
-**`src/main.py` 還有 142 條寫死的中文字面要搬。** 母表 `src/locales/zh_tw.py`
+**`src/main.py` 還有約 239 條寫死的中文字面要搬**（2026-09-21 用 AST 實測；寫下 142 那次的量法不明，同一支程式在 2026-09-14 的 commit 7146339 就已經有 179 條，之後的 manifest／更新／單卷功能又新增約 60 條）。 母表 `src/locales/zh_tw.py`
 **已經整份寫好了**（含 main.py 用得到的全部 key），所以這一步是純粹的
 「把字面換成 `t("key")`」，不需要再想 key 名稱、不需要再想譯文。
 

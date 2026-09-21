@@ -12,7 +12,7 @@
 
 **完整接手說明在專案根目錄 `I18N_RESUME.md`**，以下只列待辦重點。
 
-8. **`src/main.py` 還有 142 條寫死中文要搬 `t()`**（批次 3 未完成）。母表
+8. **`src/main.py` 還有約 239 條寫死中文要搬 `t()`**（批次 3 未完成；2026-09-21 AST 實測，數字比原本記的 142 多，說明見 `I18N_RESUME.md`）。母表
    `src/locales/zh_tw.py` 已整份寫好，key 與譯文都定好了，這步是純字面替換。
    三個要小心的點：① `THEMES` 的 `"name"` 欄要改放 key，不可在 import 時求值
    ② `_poll_queue()` 的 `{current:02d}` 格式碼不可進譯文，呼叫端先算好
@@ -34,3 +34,24 @@
     沒比照辦理
 13. **`show_cth_banner()` 直接 print ANSI escape**（順手發現）：非 tty
     （輸出重導到檔案）時會噴裸的 escape 序列
+
+## 2026-09-21 新增（manifest／更新／單卷）
+
+14. **GUI 尚未由使用者實機驗收**：「更新」按鈕、六組分類確認視窗、載入後的
+    已有檔案提示、貼網址即時提示，都只跑過 headless smoke test 與資料層驗證，
+    沒有在真實視窗裡看過。照 `windows-tool.md` 的驗收規定這不算完成
+15. **venv 要移出 Google Drive 同步範圍**：`Documents\Code` 是 Drive 備份根目錄
+    （已從 `root_preference_sqlite.db` 的 roots 表確認），venv 整包被同步，造成
+    site-packages 目錄被設唯讀屬性 → uv 換版本時 `os error 5`，以及 389 個
+    `xxx (1).py` 影子檔。2026-09-21 已手動清乾淨並重裝，但不搬走就會再發生。
+    Drive 桌面版不支援排除子資料夾，只能整個資料夾勾或不勾
+16. **`launcher.ps1` 的 dist-info 清理擋不住上面那個問題**：它只清「缺 METADATA」
+    的 dist-info，但唯讀屬性是加在所有 `dist-info\licenses` 上的，uv 照樣會失敗。
+    若 venv 短期內不搬，可考慮在跑 `uv pip install` 前先清除 site-packages 底下
+    目錄的唯讀屬性。**要動 `launcher.ps1` 的話跟第 15 項一起做，避免兩邊改同一個檔**
+17. **錨點法對「章節標題光禿」的書無效**（實測 aid=1832，10 卷全部 `anchors=0/0`）：
+    那類書退化成字數判定，斷檔偵測精度低很多。屬於資料端限制，調門檻解決不了；
+    若之後想改善，方向是拿卷內章節數 × 平均字數推估，而不是再降錨點門檻
+18. **`_open_update_dialog()` 已改綁自己的 Toplevel**（沒有第 12 項的 `bind_all`
+    洩漏問題），但 `_open_identify_dialog()` 仍未比照辦理
+
